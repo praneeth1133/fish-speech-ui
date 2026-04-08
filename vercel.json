@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "functions": {
+    "src/app/api/tts/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/voices/preview/[voiceId]/route.ts": {
+      "maxDuration": 120
+    }
+  }
+}
