@@ -1,8 +1,11 @@
 "use client";
 
+import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Sparkles, Loader2 } from "lucide-react";
 import { useTTSSettingsStore } from "@/lib/tts-settings-store";
+import { ExpressionPicker } from "@/components/expression-picker";
+import { insertTagAtCursor } from "@/lib/expression-tags";
 
 const PROMPT_SUGGESTIONS = [
   "Hello! Welcome to Fish Speech, the most natural text-to-speech system.",
@@ -18,6 +21,23 @@ export function TextEditor() {
   const setText = useTTSSettingsStore((s) => s.setText);
   const isGenerating = useTTSSettingsStore((s) => s.isGenerating);
   const generate = useTTSSettingsStore((s) => s.generate);
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleInsertTag = (tag: string) => {
+    const ta = textareaRef.current;
+    const current = useTTSSettingsStore.getState().text;
+    const start = ta?.selectionStart ?? current.length;
+    const end = ta?.selectionEnd ?? current.length;
+    const { value, cursor } = insertTagAtCursor(current, start, end, tag);
+    setText(value);
+    // Restore focus + cursor after React re-renders the value
+    requestAnimationFrame(() => {
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(cursor, cursor);
+    });
+  };
 
   return (
     <div className="flex flex-col h-full w-full lg:border-r border-border">
@@ -36,6 +56,7 @@ export function TextEditor() {
         {/* Text area with borders */}
         <div className="relative rounded-lg border-2 border-border bg-card p-4">
           <textarea
+            ref={textareaRef}
             className="w-full resize-none bg-transparent text-sm sm:text-[15px] leading-[1.7] sm:leading-[1.8]
                        text-foreground placeholder:text-muted-foreground/50 focus:outline-none
                        selection:bg-accent font-[inherit]"
@@ -52,7 +73,10 @@ export function TextEditor() {
           )}
         </div>
 
-        {/* Generate button - ABOVE suggestions */}
+        {/* Expression tags picker */}
+        <ExpressionPicker onInsert={handleInsertTag} />
+
+        {/* Generate button - BELOW tags, ABOVE suggestions */}
         <div className="mt-6 mb-4">
           <Button
             onClick={generate}

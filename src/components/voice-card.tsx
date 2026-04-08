@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import { User, UserRound } from "lucide-react";
 import { VoicePreviewPlayer } from "./voice-preview-player";
-import { LANGUAGE_COLORS, LANGUAGE_AVATAR_BG } from "@/lib/voice-names";
+import { LANGUAGE_COLORS, LANGUAGE_AVATAR_BG, COUNTRIES } from "@/lib/voice-names";
 
 export interface EnrichedVoice {
   id: string;
@@ -16,6 +16,11 @@ export interface EnrichedVoice {
   tagline?: string;
   previewUrl?: string;
   is_backend_ref?: boolean;
+  country?: string;
+  countryCode?: string;
+  ageBucket?: "young" | "adult" | "older";
+  age?: number | null;
+  source?: "fish-speech-builtin" | "vctk";
 }
 
 interface VoiceCardProps {
@@ -71,18 +76,37 @@ export function VoiceCard({
               <UserRound className="h-3 w-3 text-pink-400/50 flex-shrink-0" />
             )}
           </div>
-          <div className="flex items-center gap-1.5 mt-0.5">
+          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
             <span
               className={`inline-flex text-[9px] font-medium px-1.5 py-0.5 rounded-full ${colors.bg} ${colors.text}`}
             >
               {voice.language || lang}
             </span>
-            {voice.tagline && (
-              <span className="text-[10px] text-muted-foreground truncate">
-                {voice.tagline}
+            {voice.countryCode &&
+              (() => {
+                const c = COUNTRIES.find((x) => x.code === voice.countryCode);
+                if (!c) return null;
+                return (
+                  <span
+                    className="inline-flex items-center gap-0.5 text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-muted/60 text-muted-foreground"
+                    title={c.name}
+                  >
+                    <span>{c.flag}</span>
+                    <span className="uppercase">{c.code}</span>
+                  </span>
+                );
+              })()}
+            {voice.ageBucket && (
+              <span className="inline-flex text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-muted/40 text-muted-foreground capitalize">
+                {voice.ageBucket}
               </span>
             )}
           </div>
+          {voice.tagline && (
+            <span className="text-[10px] text-muted-foreground truncate block mt-0.5">
+              {voice.tagline}
+            </span>
+          )}
         </div>
       </div>
 

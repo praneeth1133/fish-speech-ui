@@ -28,7 +28,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
-import { LANGUAGES, LANGUAGE_COLORS, LANGUAGE_AVATAR_BG } from "@/lib/voice-names";
+import { LANGUAGES, COUNTRIES, AGE_BUCKETS } from "@/lib/voice-names";
 
 interface DBVoice {
   id: string;
@@ -44,6 +44,11 @@ interface DBVoice {
   avatarInitials?: string;
   tagline?: string;
   previewUrl?: string;
+  country?: string;
+  countryCode?: string;
+  ageBucket?: "young" | "adult" | "older";
+  age?: number | null;
+  source?: "fish-speech-builtin" | "vctk";
 }
 
 export default function VoicesPage() {
@@ -58,6 +63,8 @@ export default function VoicesPage() {
   const [search, setSearch] = useState("");
   const [selectedLanguage, setSelectedLanguage] = useState("all");
   const [selectedGender, setSelectedGender] = useState("all");
+  const [selectedCountry, setSelectedCountry] = useState("all");
+  const [selectedAge, setSelectedAge] = useState("all");
 
   const fetchVoices = useCallback(async () => {
     const res = await fetch("/api/voices");
@@ -115,22 +122,41 @@ export default function VoicesPage() {
 
   // Filter backend voices
   const filteredBackendVoices = backendVoices.filter((v) => {
+    const q = search.toLowerCase();
     const matchesSearch =
-      !search ||
-      (v.displayName || v.name).toLowerCase().includes(search.toLowerCase()) ||
-      (v.language || "").toLowerCase().includes(search.toLowerCase());
+      !q ||
+      (v.displayName || v.name).toLowerCase().includes(q) ||
+      (v.language || "").toLowerCase().includes(q) ||
+      (v.country || "").toLowerCase().includes(q) ||
+      (v.tagline || "").toLowerCase().includes(q);
     const matchesLanguage =
       selectedLanguage === "all" ||
       (v.language || "").toLowerCase() === selectedLanguage;
     const matchesGender =
       selectedGender === "all" || v.gender === selectedGender;
-    return matchesSearch && matchesLanguage && matchesGender;
+    const matchesCountry =
+      selectedCountry === "all" || v.countryCode === selectedCountry;
+    const matchesAge =
+      selectedAge === "all" || v.ageBucket === selectedAge;
+    return matchesSearch && matchesLanguage && matchesGender && matchesCountry && matchesAge;
   });
 
   const langCounts: Record<string, number> = { all: backendVoices.length };
   backendVoices.forEach((v) => {
     const l = (v.language || "").toLowerCase();
     langCounts[l] = (langCounts[l] || 0) + 1;
+  });
+
+  // Count per country — only show countries that actually have voices
+  const countryCounts: Record<string, number> = { all: backendVoices.length };
+  backendVoices.forEach((v) => {
+    if (v.countryCode) countryCounts[v.countryCode] = (countryCounts[v.countryCode] || 0) + 1;
+  });
+  const visibleCountries = COUNTRIES.filter((c) => (countryCounts[c.code] || 0) > 0);
+
+  const ageCounts: Record<string, number> = { all: backendVoices.length };
+  backendVoices.forEach((v) => {
+    if (v.ageBucket) ageCounts[v.ageBucket] = (ageCounts[v.ageBucket] || 0) + 1;
   });
 
   return (
@@ -293,6 +319,7 @@ export default function VoicesPage() {
                 )}
               </div>
 
+              {/* Language + Gender row */}
               <div className="flex items-center gap-1 flex-wrap">
                 {["all", ...LANGUAGES].map((lang) => (
                   <button
@@ -326,6 +353,71 @@ export default function VoicesPage() {
                     }`}
                   >
                     {g === "all" ? "All" : g.charAt(0).toUpperCase() + g.slice(1)}
+                  </button>
+                ))}
+
+                <span className="w-px h-4 bg-muted mx-1" />
+
+                {/* Age buckets */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedAge("all")}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200 ${
+                    selectedAge === "all"
+                      ? "bg-accent text-foreground"
+                      : "bg-muted/50 text-foreground/40 hover:bg-accent hover:text-foreground/60"
+                  }`}
+                >
+                  Any Age
+                </button>
+                {AGE_BUCKETS.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => setSelectedAge(a.id)}
+                    title={a.hint}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200 ${
+                      selectedAge === a.id
+                        ? "bg-accent text-foreground"
+                        : "bg-muted/50 text-foreground/40 hover:bg-accent hover:text-foreground/60"
+                    }`}
+                  >
+                    {a.label}
+                    <span className="ml-1 text-[10px] opacity-60">
+                      {ageCounts[a.id] || 0}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Country row */}
+              <div className="flex items-center gap-1 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setSelectedCountry("all")}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200 ${
+                    selectedCountry === "all"
+                      ? "bg-accent text-foreground"
+                      : "bg-muted/50 text-foreground/40 hover:bg-accent hover:text-foreground/60"
+                  }`}
+                >
+                  🌐 All Countries
+                  <span className="ml-1 text-[10px] opacity-60">{countryCounts.all || 0}</span>
+                </button>
+                {visibleCountries.map((c) => (
+                  <button
+                    key={c.code}
+                    type="button"
+                    onClick={() => setSelectedCountry(c.code)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200 ${
+                      selectedCountry === c.code
+                        ? "bg-accent text-foreground"
+                        : "bg-muted/50 text-foreground/40 hover:bg-accent hover:text-foreground/60"
+                    }`}
+                  >
+                    <span className="mr-1">{c.flag}</span>
+                    {c.name}
+                    <span className="ml-1 text-[10px] opacity-60">{countryCounts[c.code] || 0}</span>
                   </button>
                 ))}
               </div>

@@ -42,3 +42,10 @@ next-env.d.ts
 
 # legacy local-only data dir from the SQLite/disk era — no longer used
 /data
+
+# VCTK parquet shards — downloaded on demand by scripts/vctk-work/extract_and_register.py
+# Too large (2+ GB) to commit. The generated WAV samples go to scripts/vctk-work/voices/
+# which we also skip (they're one-time fixtures for backend registration, not runtime assets)
+/scripts/vctk-work/shard*.parquet
+/scripts/vctk-work/voices/
+/scripts/vctk-work/manifest.urls
