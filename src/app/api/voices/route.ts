@@ -34,7 +34,7 @@ export async function GET() {
       languageCode: info?.languageCode || lang.slice(0, 2),
       avatarInitials: info?.avatarInitials || refId.slice(0, 2).toUpperCase(),
       tagline: info?.tagline || "",
-      previewUrl: `/api/voices/preview/${refId}`,
+      previewUrl: `/previews/${refId}.wav`,
       description: "",
       reference_text: "",
       is_backend_ref: true,
