@@ -20,25 +20,70 @@ import { toast } from "sonner";
 import { useState, useEffect } from "react";
 import { getVoiceDisplayInfo } from "@/lib/voice-names";
 
-function ElapsedTime({ startedAt }: { startedAt: string | null }) {
+function formatClock(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+/**
+ * Estimate how long generation will take based on text length. The Fish
+ * Speech model runs at roughly real-time on a 5060 Ti, and generated audio
+ * runs ~15 chars/sec. We add a 5-second base for warmup/overhead and cap at
+ * 120s (the longest we've observed under 200 chars). The progress curve
+ * never visually reaches 100% until the job actually completes, so users
+ * don't stare at a full bar waiting.
+ */
+function estimatedDurationSeconds(text: string): number {
+  const raw = text.length * 0.4 + 5;
+  return Math.max(10, Math.min(120, raw));
+}
+
+/**
+ * Thin progress indicator for a job in the "processing" state. Smoothly
+ * ticks once per 250ms so the bar animates even while waiting on a single
+ * blocking /api/tts call.
+ */
+function ProcessingProgress({
+  startedAt,
+  text,
+}: {
+  startedAt: string | null;
+  text: string;
+}) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     if (!startedAt) return;
     const start = new Date(startedAt).getTime();
-    const update = () => setElapsed(Math.floor((Date.now() - start) / 1000));
+    const update = () => setElapsed((Date.now() - start) / 1000);
     update();
-    const timer = setInterval(update, 1000);
+    const timer = setInterval(update, 250);
     return () => clearInterval(timer);
   }, [startedAt]);
 
   if (!startedAt) return null;
-  const mins = Math.floor(elapsed / 60);
-  const secs = elapsed % 60;
+
+  const estimated = estimatedDurationSeconds(text);
+  // Cap at 95% so we never claim "done" before the network response arrives
+  const progress = Math.min(0.95, elapsed / estimated);
+  const percent = Math.floor(progress * 100);
+  const remaining = Math.max(0, estimated - elapsed);
+
   return (
-    <span className="text-xs text-muted-foreground tabular-nums">
-      {mins}:{secs.toString().padStart(2, "0")}
-    </span>
+    <div className="mt-2 space-y-1">
+      <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-full bg-blue-400 transition-[width] duration-200 ease-linear"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <div className="flex items-center justify-between text-[10px] text-muted-foreground tabular-nums">
+        <span>{formatClock(elapsed)} elapsed</span>
+        <span>{percent}%</span>
+        <span>~{formatClock(remaining)} left</span>
+      </div>
+    </div>
   );
 }
 
@@ -132,14 +177,16 @@ function JobItem({
             {job.format}
           </Badge>
 
-          {job.status === "processing" && <ElapsedTime startedAt={job.started_at} />}
-
           {job.status === "failed" && job.error && (
             <span className="text-xs text-destructive truncate max-w-[200px]">
               {job.error}
             </span>
           )}
         </div>
+
+        {job.status === "processing" && (
+          <ProcessingProgress startedAt={job.started_at} text={job.text} />
+        )}
 
         {job.status === "completed" && <CompletedJobAudio job={job} />}
       </div>
