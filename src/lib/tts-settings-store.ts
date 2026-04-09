@@ -23,7 +23,9 @@ interface TTSSettingsStore {
   chunkLength: number;
   setChunkLength: (v: number) => void;
   isGenerating: boolean;
+  isAnnotating: boolean;
   generate: () => Promise<void>;
+  generateExpressions: () => Promise<void>;
 }
 
 export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
@@ -46,6 +48,38 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
   chunkLength: 200,
   setChunkLength: (v) => set({ chunkLength: v }),
   isGenerating: false,
+  isAnnotating: false,
+
+  generateExpressions: async () => {
+    const state = get();
+    if (!state.text.trim() || state.isAnnotating) return;
+
+    set({ isAnnotating: true });
+    try {
+      const res = await fetch("/api/generate-expressions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: state.text }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: "Request failed" }));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      const { annotatedText } = await res.json();
+      set({ text: annotatedText });
+      toast.success("Expressions added", {
+        description: "Review the tags, then generate speech.",
+      });
+    } catch (e) {
+      toast.error("Failed to generate expressions", {
+        description: e instanceof Error ? e.message : "An error occurred",
+      });
+    } finally {
+      set({ isAnnotating: false });
+    }
+  },
 
   generate: async () => {
     const state = get();
