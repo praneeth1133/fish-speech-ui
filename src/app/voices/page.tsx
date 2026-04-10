@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -17,9 +16,12 @@ import {
 } from "@/components/ui/dialog";
 import { VoiceCard, type EnrichedVoice } from "@/components/voice-card";
 import {
+  VoiceRecorder,
+  type VoiceRecorderState,
+} from "@/components/voice-recorder";
+import {
   Plus,
   Trash2,
-  Upload,
   Mic,
   Library,
   Search,
@@ -57,8 +59,11 @@ export default function VoicesPage() {
   const [isOpen, setIsOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [referenceText, setReferenceText] = useState("");
-  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [recording, setRecording] = useState<VoiceRecorderState>({
+    wavBlob: null,
+    referenceText: "",
+    durationSeconds: 0,
+  });
   const [isCreating, setIsCreating] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedLanguage, setSelectedLanguage] = useState("all");
@@ -78,25 +83,37 @@ export default function VoicesPage() {
   }, [fetchVoices]);
 
   const handleCreate = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || !recording.wavBlob) return;
     setIsCreating(true);
     try {
       const formData = new FormData();
-      formData.append("name", name);
+      formData.append("name", name.trim());
       formData.append("description", description);
-      formData.append("reference_text", referenceText);
-      if (audioFile) formData.append("audio", audioFile);
-      const res = await fetch("/api/voices", { method: "POST", body: formData });
-      if (!res.ok) throw new Error("Failed to create voice");
-      toast.success("Voice created successfully");
+      formData.append("reference_text", recording.referenceText);
+      formData.append(
+        "audio",
+        new File([recording.wavBlob], "recording.wav", { type: "audio/wav" })
+      );
+      const res = await fetch("/api/voices", {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: "Failed" }));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      toast.success("Voice created", {
+        description: `"${name.trim()}" is ready to use.`,
+      });
       setIsOpen(false);
       setName("");
       setDescription("");
-      setReferenceText("");
-      setAudioFile(null);
+      setRecording({ wavBlob: null, referenceText: "", durationSeconds: 0 });
       fetchVoices();
-    } catch {
-      toast.error("Failed to create voice");
+    } catch (err) {
+      toast.error("Failed to create voice", {
+        description: err instanceof Error ? err.message : "Unknown error",
+      });
     } finally {
       setIsCreating(false);
     }
@@ -169,66 +186,65 @@ export default function VoicesPage() {
             {backendVoices.length} pre-loaded voices across {LANGUAGES.length} languages
           </p>
         </div>
-        <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <Dialog
+          open={isOpen}
+          onOpenChange={(next) => {
+            setIsOpen(next);
+            if (!next) {
+              // Reset form on close
+              setName("");
+              setDescription("");
+              setRecording({
+                wavBlob: null,
+                referenceText: "",
+                durationSeconds: 0,
+              });
+            }
+          }}
+        >
           <DialogTrigger render={<Button className="gap-2" />}>
             <Plus className="h-4 w-4" />
-            Add Custom Voice
+            Record New Voice
           </DialogTrigger>
-          <DialogContent className="sm:max-w-lg">
+          <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Create New Voice</DialogTitle>
+              <DialogTitle>Record Your Voice</DialogTitle>
             </DialogHeader>
-            <div className="space-y-4 pt-4">
-              <div className="space-y-2">
-                <Label>Voice Name</Label>
-                <Input
-                  placeholder="My Custom Voice"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Description (optional)</Label>
-                <Input
-                  placeholder="A warm, friendly voice"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Reference Audio</Label>
-                <div className="border-2 border-dashed border-border rounded-lg p-6 text-center hover:border-primary/30 transition-colors">
-                  <input
-                    type="file"
-                    accept="audio/*"
-                    onChange={(e) => setAudioFile(e.target.files?.[0] || null)}
-                    className="hidden"
-                    id="audio-upload"
+            <div className="space-y-5 pt-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Voice Name</Label>
+                  <Input
+                    placeholder="My Voice"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
                   />
-                  <label htmlFor="audio-upload" className="cursor-pointer space-y-2">
-                    <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
-                    <p className="text-sm text-muted-foreground">
-                      {audioFile ? audioFile.name : "Click to upload reference audio"}
-                    </p>
-                  </label>
+                </div>
+                <div className="space-y-2">
+                  <Label>Description (optional)</Label>
+                  <Input
+                    placeholder="Warm & friendly"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                  />
                 </div>
               </div>
-              <div className="space-y-2">
-                <Label>Reference Text</Label>
-                <Textarea
-                  placeholder="Enter the exact text spoken in the reference audio..."
-                  value={referenceText}
-                  onChange={(e) => setReferenceText(e.target.value)}
-                  className="min-h-[80px]"
-                />
-              </div>
+
+              <VoiceRecorder onChange={setRecording} />
+
               <Button
                 onClick={handleCreate}
-                disabled={!name.trim() || isCreating}
+                disabled={!name.trim() || !recording.wavBlob || isCreating}
                 className="w-full"
+                size="lg"
               >
-                {isCreating ? "Creating..." : "Create Voice"}
+                {isCreating ? "Saving voice…" : "Save Voice"}
               </Button>
+              {!recording.wavBlob && name.trim() && (
+                <p className="text-[11px] text-muted-foreground text-center -mt-2">
+                  Record a clip to enable Save
+                </p>
+              )}
             </div>
           </DialogContent>
         </Dialog>
