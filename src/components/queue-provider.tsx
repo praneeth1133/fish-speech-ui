@@ -2,7 +2,12 @@
 
 import { useEffect, useRef } from "react";
 import { useQueueStore, type QueueJob } from "@/lib/queue-store";
-import { getHistoryAudioUrl } from "@/lib/idb";
+import {
+  addHistoryItem,
+  getHistoryAudioUrl,
+  getHistoryItem,
+} from "@/lib/idb";
+import { concatAudioBlobs } from "@/lib/wav-concat";
 import { toast } from "sonner";
 
 /**
@@ -18,6 +23,8 @@ export function QueueProvider() {
   const processNext = useQueueStore((s) => s.processNext);
   const resetStaleProcessing = useQueueStore((s) => s.resetStaleProcessing);
   const prevJobsRef = useRef<QueueJob[]>([]);
+  /** Track batch_ids that have already been concatenated to avoid re-doing work */
+  const concatenatedBatchesRef = useRef<Set<string>>(new Set());
 
   // Mount-only setup: reset stale + ask for notification permission
   useEffect(() => {
@@ -93,6 +100,95 @@ export function QueueProvider() {
     }
 
     prevJobsRef.current = jobs;
+  }, [jobs]);
+
+  // Watch for batches that have just finished (all jobs completed) and
+  // concatenate their audio into a single history entry.
+  useEffect(() => {
+    // Group jobs by batch_id
+    const batches = new Map<string, QueueJob[]>();
+    for (const job of jobs) {
+      if (!job.batch_id) continue;
+      const list = batches.get(job.batch_id) || [];
+      list.push(job);
+      batches.set(job.batch_id, list);
+    }
+
+    for (const [batchId, batchJobs] of batches) {
+      if (concatenatedBatchesRef.current.has(batchId)) continue;
+
+      const size = batchJobs[0]?.batch_size || batchJobs.length;
+      const allDone =
+        batchJobs.length === size &&
+        batchJobs.every((j) => j.status === "completed" && j.history_id);
+
+      if (!allDone) continue;
+
+      // Mark as in-progress immediately so concurrent renders don't double-run
+      concatenatedBatchesRef.current.add(batchId);
+
+      // Sort by batch_order
+      const ordered = [...batchJobs].sort(
+        (a, b) => (a.batch_order ?? 0) - (b.batch_order ?? 0)
+      );
+
+      (async () => {
+        try {
+          // Load each segment's blob from IDB
+          const blobs: Blob[] = [];
+          for (const j of ordered) {
+            if (!j.history_id) continue;
+            const item = await getHistoryItem(j.history_id);
+            if (item?.blob) blobs.push(item.blob);
+          }
+          if (blobs.length === 0) return;
+
+          const combined = await concatAudioBlobs(blobs, { gapSeconds: 0.35 });
+
+          // Build a human-readable preview text
+          const combinedText = ordered
+            .map((j) => `${j.character ? j.character + ": " : ""}${j.text}`)
+            .join("\n");
+
+          const newId = crypto.randomUUID();
+          await addHistoryItem({
+            id: newId,
+            text: combinedText.slice(0, 500),
+            voice_id: null,
+            voice_name: `Multi-Voice (${ordered.length} segments)`,
+            format: "wav",
+            settings: null,
+            created_at: new Date().toISOString(),
+            blob: combined,
+          });
+
+          toast.success("Multi-voice audio ready", {
+            description: `${ordered.length} segments combined into one file`,
+            duration: 12000,
+            action: {
+              label: "Download",
+              onClick: async () => {
+                const url = await getHistoryAudioUrl(newId);
+                if (!url) return;
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `fish-speech-multi-${newId.slice(0, 8)}.wav`;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(url), 60_000);
+              },
+            },
+          });
+        } catch (err) {
+          console.error("Batch concat failed:", err);
+          toast.error("Failed to combine multi-voice audio", {
+            description:
+              err instanceof Error ? err.message : "Unknown error",
+          });
+          // Allow a future retry by removing from the seen set
+          concatenatedBatchesRef.current.delete(batchId);
+        }
+      })();
+    }
   }, [jobs]);
 
   return null;

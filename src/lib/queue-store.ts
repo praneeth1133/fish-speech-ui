@@ -30,6 +30,15 @@ export interface QueueJob {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  /** Optional batch id for multi-voice scripts. All segments of the same script
+   * share the same batch_id so the UI can group them and auto-concat when done. */
+  batch_id: string | null;
+  /** Position of this job within its batch (0-indexed). Null when not in a batch. */
+  batch_order: number | null;
+  /** Total number of jobs in the batch. Null when not in a batch. */
+  batch_size: number | null;
+  /** Character label for this segment (e.g., "Alice", "Narrator"). */
+  character: string | null;
 }
 
 export interface AddJobParams {
@@ -44,6 +53,10 @@ export interface AddJobParams {
   chunk_length?: number;
   seed?: number;
   normalize?: boolean;
+  batch_id?: string;
+  batch_order?: number;
+  batch_size?: number;
+  character?: string;
 }
 
 interface QueueState {
@@ -101,6 +114,10 @@ export const useQueueStore = create<QueueState>()(
           created_at: nowIso(),
           started_at: null,
           completed_at: null,
+          batch_id: params.batch_id || null,
+          batch_order: params.batch_order ?? null,
+          batch_size: params.batch_size ?? null,
+          character: params.character || null,
         };
         set((s) => ({ jobs: [...s.jobs, job], version: s.version + 1 }));
         return job;

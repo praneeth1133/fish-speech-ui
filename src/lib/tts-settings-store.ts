@@ -3,6 +3,22 @@ import { useQueueStore } from "./queue-store";
 import { toast } from "sonner";
 import type { EnrichedVoice } from "@/components/voice-card";
 
+export interface ScriptCharacter {
+  name: string;
+  description: string;
+}
+
+export interface ScriptSegment {
+  character: string;
+  text: string;
+}
+
+export interface CharacterVoiceAssignment {
+  /** null means use the default voice */
+  voice_id: string | null;
+  voice_name: string;
+}
+
 interface TTSSettingsStore {
   text: string;
   setText: (t: string) => void;
@@ -24,8 +40,25 @@ interface TTSSettingsStore {
   setChunkLength: (v: number) => void;
   isGenerating: boolean;
   isAnnotating: boolean;
+  isIdentifying: boolean;
+
+  /** Parsed script characters, null until `identifyCharacters` is run */
+  characters: ScriptCharacter[] | null;
+  /** Ordered segments with character attribution */
+  segments: ScriptSegment[] | null;
+  /** Character name -> assigned voice */
+  characterAssignments: Record<string, CharacterVoiceAssignment>;
+
   generate: () => Promise<void>;
   generateExpressions: () => Promise<void>;
+  identifyCharacters: () => Promise<void>;
+  clearCharacters: () => void;
+  setCharacterVoice: (
+    character: string,
+    voice_id: string | null,
+    voice_name: string
+  ) => void;
+  generateMultiVoice: () => Promise<void>;
 }
 
 export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
@@ -49,6 +82,11 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
   setChunkLength: (v) => set({ chunkLength: v }),
   isGenerating: false,
   isAnnotating: false,
+  isIdentifying: false,
+
+  characters: null,
+  segments: null,
+  characterAssignments: {},
 
   generateExpressions: async () => {
     const state = get();
@@ -81,6 +119,110 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
     }
   },
 
+  identifyCharacters: async () => {
+    const state = get();
+    if (!state.text.trim() || state.isIdentifying) return;
+
+    set({ isIdentifying: true });
+    try {
+      const res = await fetch("/api/identify-characters", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: state.text }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: "Request failed" }));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      const { characters, segments } = (await res.json()) as {
+        characters: ScriptCharacter[];
+        segments: ScriptSegment[];
+      };
+
+      // Initialize assignments to default voice for each character
+      const assignments: Record<string, CharacterVoiceAssignment> = {};
+      for (const c of characters) {
+        assignments[c.name] = { voice_id: null, voice_name: "Default" };
+      }
+
+      set({
+        characters,
+        segments,
+        characterAssignments: assignments,
+      });
+
+      toast.success(`Found ${characters.length} character${characters.length === 1 ? "" : "s"}`, {
+        description: `Assign a voice to each and generate.`,
+      });
+    } catch (e) {
+      toast.error("Failed to identify characters", {
+        description: e instanceof Error ? e.message : "An error occurred",
+      });
+    } finally {
+      set({ isIdentifying: false });
+    }
+  },
+
+  clearCharacters: () => {
+    set({ characters: null, segments: null, characterAssignments: {} });
+  },
+
+  setCharacterVoice: (character, voice_id, voice_name) => {
+    set((s) => ({
+      characterAssignments: {
+        ...s.characterAssignments,
+        [character]: { voice_id, voice_name },
+      },
+    }));
+  },
+
+  generateMultiVoice: async () => {
+    const state = get();
+    if (!state.segments || state.segments.length === 0) return;
+
+    const batch_id = crypto.randomUUID();
+    const total = state.segments.length;
+
+    for (let i = 0; i < state.segments.length; i++) {
+      const seg = state.segments[i];
+      const assignment = state.characterAssignments[seg.character] || {
+        voice_id: null,
+        voice_name: "Default",
+      };
+
+      useQueueStore.getState().addJob({
+        text: seg.text,
+        voice_id: assignment.voice_id || undefined,
+        voice_name: assignment.voice_name,
+        format: state.format,
+        temperature: state.temperature,
+        top_p: state.topP,
+        repetition_penalty: state.repetitionPenalty,
+        max_new_tokens: state.maxTokens,
+        chunk_length: state.chunkLength,
+        batch_id,
+        batch_order: i,
+        batch_size: total,
+        character: seg.character,
+      });
+    }
+
+    toast.success(`Queued ${total} segment${total === 1 ? "" : "s"}`, {
+      description:
+        "Segments will generate one-by-one and auto-combine when done.",
+    });
+
+    // Clear script + character state; leave queue alone
+    set({
+      text: "",
+      characters: null,
+      segments: null,
+      characterAssignments: {},
+    });
+  },
+
   generate: async () => {
     const state = get();
     if (!state.text.trim()) return;
@@ -98,7 +240,7 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
         voiceName = voice.displayName || voice.name;
       }
 
-      await useQueueStore.getState().addJob({
+      useQueueStore.getState().addJob({
         text: state.text.trim(),
         format: state.format,
         voice_id: voiceId,

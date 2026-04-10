@@ -2,7 +2,7 @@
 
 import { useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, Wand2 } from "lucide-react";
+import { Sparkles, Loader2, Wand2, Users } from "lucide-react";
 import { useTTSSettingsStore } from "@/lib/tts-settings-store";
 import { ExpressionPicker } from "@/components/expression-picker";
 import { insertTagAtCursor } from "@/lib/expression-tags";
@@ -21,8 +21,10 @@ export function TextEditor() {
   const setText = useTTSSettingsStore((s) => s.setText);
   const isGenerating = useTTSSettingsStore((s) => s.isGenerating);
   const isAnnotating = useTTSSettingsStore((s) => s.isAnnotating);
+  const isIdentifying = useTTSSettingsStore((s) => s.isIdentifying);
   const generate = useTTSSettingsStore((s) => s.generate);
   const generateExpressions = useTTSSettingsStore((s) => s.generateExpressions);
+  const identifyCharacters = useTTSSettingsStore((s) => s.identifyCharacters);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -79,29 +81,45 @@ export function TextEditor() {
         <ExpressionPicker onInsert={handleInsertTag} />
 
         {/* Action buttons */}
-        <div className="mt-6 mb-4 flex gap-3">
-          {/* Generate Expressions — AI-powered, secondary style */}
-          <Button
-            onClick={generateExpressions}
-            disabled={!text.trim() || isAnnotating || isGenerating}
-            variant="outline"
-            size="lg"
-            className="flex-1 h-12 text-base font-semibold rounded-lg transition-all duration-200"
-          >
-            {isAnnotating ? (
-              <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-            ) : (
-              <Wand2 className="h-5 w-5 mr-2" />
-            )}
-            {isAnnotating ? "Adding Tags..." : "Generate Expressions"}
-          </Button>
+        <div className="mt-6 mb-4 space-y-2">
+          {/* AI-powered helpers — two outline buttons */}
+          <div className="flex gap-2">
+            <Button
+              onClick={generateExpressions}
+              disabled={!text.trim() || isAnnotating || isGenerating || isIdentifying}
+              variant="outline"
+              size="default"
+              className="flex-1 h-10 text-sm font-semibold rounded-lg transition-all duration-200"
+            >
+              {isAnnotating ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Wand2 className="h-4 w-4 mr-2" />
+              )}
+              {isAnnotating ? "Adding Tags..." : "Generate Expressions"}
+            </Button>
+            <Button
+              onClick={identifyCharacters}
+              disabled={!text.trim() || isIdentifying || isGenerating || isAnnotating}
+              variant="outline"
+              size="default"
+              className="flex-1 h-10 text-sm font-semibold rounded-lg transition-all duration-200"
+            >
+              {isIdentifying ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Users className="h-4 w-4 mr-2" />
+              )}
+              {isIdentifying ? "Parsing..." : "Identify Characters"}
+            </Button>
+          </div>
 
-          {/* Generate Speech — primary style */}
+          {/* Primary action */}
           <Button
             onClick={generate}
-            disabled={!text.trim() || isGenerating || isAnnotating}
+            disabled={!text.trim() || isGenerating || isAnnotating || isIdentifying}
             size="lg"
-            className="flex-1 h-12 text-base font-semibold bg-primary text-primary-foreground
+            className="w-full h-12 text-base font-semibold bg-primary text-primary-foreground
                        hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground
                        rounded-lg transition-all duration-200 shadow-sm hover:shadow-md active:scale-95"
           >

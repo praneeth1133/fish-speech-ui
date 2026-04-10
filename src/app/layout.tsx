@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueueProvider } from "@/components/queue-provider";
+import { CharacterAssignment } from "@/components/character-assignment";
 import { ThemeProvider } from "@/components/theme-provider";
 
 const inter = Inter({
@@ -48,6 +49,7 @@ export default function RootLayout({
               {children}
             </main>
             <QueueProvider />
+            <CharacterAssignment />
             <Toaster />
           </TooltipProvider>
         </ThemeProvider>

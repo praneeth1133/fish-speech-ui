@@ -165,9 +165,21 @@ function JobItem({
 
       {/* Content */}
       <div className="flex-1 min-w-0 space-y-1.5">
-        <p className="text-sm line-clamp-2">{job.text}</p>
+        <p className="text-sm line-clamp-2">
+          {job.character && (
+            <span className="font-semibold text-primary/80 mr-1">
+              {job.character}:
+            </span>
+          )}
+          {job.text}
+        </p>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {job.batch_id && job.batch_size ? (
+            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+              Segment {(job.batch_order ?? 0) + 1}/{job.batch_size}
+            </Badge>
+          ) : null}
           <Badge variant="outline" className="text-[10px] px-1.5 py-0">
             {getVoiceDisplayInfo(job.voice_name)?.displayName ||
               getVoiceDisplayInfo(job.voice_id || "")?.displayName ||
