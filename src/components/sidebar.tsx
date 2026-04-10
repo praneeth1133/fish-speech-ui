@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { useQueueStore } from "@/lib/queue-store";
+import { useBackendStatus } from "@/lib/use-backend-status";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 
@@ -36,6 +37,7 @@ export function Sidebar() {
   const { setTheme, resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const backendStatus = useBackendStatus();
 
   useEffect(() => setMounted(true), []);
   // Close mobile menu on route change
@@ -105,12 +107,37 @@ export function Sidebar() {
             {isDark ? "Light Mode" : "Dark Mode"}
           </button>
         )}
-        <div className="flex items-center gap-2 px-3 text-[11px] text-muted-foreground">
+        <div
+          className="flex items-center gap-2 px-3 text-[11px] text-muted-foreground"
+          title={
+            backendStatus === "connected"
+              ? "Fish Speech backend is reachable"
+              : backendStatus === "disconnected"
+                ? "Backend is offline — start your local Fish Speech server + ngrok tunnel"
+                : "Checking backend status…"
+          }
+        >
           <Activity className="h-3 w-3" />
-          <span>Server Status</span>
-          <span className="ml-auto flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-green-400 opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+          <span>
+            {backendStatus === "connected"
+              ? "Server Online"
+              : backendStatus === "disconnected"
+                ? "Server Offline"
+                : "Checking…"}
+          </span>
+          <span className="ml-auto relative flex h-2 w-2">
+            {backendStatus === "connected" && (
+              <>
+                <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+              </>
+            )}
+            {backendStatus === "disconnected" && (
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+            )}
+            {backendStatus === "checking" && (
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-muted-foreground/50 animate-pulse" />
+            )}
           </span>
         </div>
       </div>
