@@ -59,12 +59,23 @@ export interface AddJobParams {
   character?: string;
 }
 
+export interface BatchResult {
+  /** IndexedDB history id of the merged WAV */
+  mergedHistoryId: string;
+  /** ISO timestamp when the merge completed */
+  completedAt: string;
+  /** Number of segments that were merged */
+  segmentCount: number;
+}
+
 interface QueueState {
   jobs: QueueJob[];
   /** True while a fetch to /api/tts is in flight. Single-job-at-a-time. */
   processing: boolean;
   /** Bumped after each job change so consumers can react. */
   version: number;
+  /** Merged-audio result per batch_id. Populated by queue-provider after concat. */
+  batchResults: Record<string, BatchResult>;
 
   addJob: (params: AddJobParams) => QueueJob;
   removeJob: (id: string) => void;
@@ -74,6 +85,10 @@ interface QueueState {
   processNext: () => Promise<void>;
   /** Reset any "processing" jobs left over from a previous tab close. */
   resetStaleProcessing: () => void;
+  /** Record a batch's merged history id so the pipeline view can show Download */
+  setBatchResult: (batchId: string, result: BatchResult) => void;
+  /** Drop a batch and all of its jobs from the queue */
+  clearBatch: (batchId: string) => void;
 }
 
 function genId(): string {
@@ -90,6 +105,26 @@ export const useQueueStore = create<QueueState>()(
       jobs: [],
       processing: false,
       version: 0,
+      batchResults: {},
+
+      setBatchResult: (batchId, result) => {
+        set((s) => ({
+          batchResults: { ...s.batchResults, [batchId]: result },
+          version: s.version + 1,
+        }));
+      },
+
+      clearBatch: (batchId) => {
+        set((s) => {
+          const { [batchId]: _dropped, ...restResults } = s.batchResults;
+          void _dropped;
+          return {
+            jobs: s.jobs.filter((j) => j.batch_id !== batchId),
+            batchResults: restResults,
+            version: s.version + 1,
+          };
+        });
+      },
 
       addJob: (params) => {
         const settings = {
@@ -280,7 +315,10 @@ export const useQueueStore = create<QueueState>()(
         }
         return window.localStorage;
       }),
-      partialize: (state) => ({ jobs: state.jobs }),
+      partialize: (state) => ({
+        jobs: state.jobs,
+        batchResults: state.batchResults,
+      }),
     }
   )
 );

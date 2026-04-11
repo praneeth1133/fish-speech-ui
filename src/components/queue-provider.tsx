@@ -162,6 +162,13 @@ export function QueueProvider() {
             blob: combined,
           });
 
+          // Record the merged history id so the pipeline view can offer download
+          useQueueStore.getState().setBatchResult(batchId, {
+            mergedHistoryId: newId,
+            completedAt: new Date().toISOString(),
+            segmentCount: ordered.length,
+          });
+
           toast.success("Multi-voice audio ready", {
             description: `${ordered.length} segments combined into one file`,
             duration: 12000,

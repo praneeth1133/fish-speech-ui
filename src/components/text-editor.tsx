@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Sparkles, Loader2, Wand2, Users } from "lucide-react";
 import { useTTSSettingsStore } from "@/lib/tts-settings-store";
 import { ExpressionPicker } from "@/components/expression-picker";
+import { BatchPipeline } from "@/components/batch-pipeline";
 import { insertTagAtCursor } from "@/lib/expression-tags";
 
 const PROMPT_SUGGESTIONS = [
@@ -131,6 +132,9 @@ export function TextEditor() {
             {isGenerating ? "Generating..." : "Generate Speech"}
           </Button>
         </div>
+
+        {/* Multi-voice pipeline — only renders when a batch is active or recently finished */}
+        <BatchPipeline />
 
         {/* Prompt suggestions - only when no text */}
         {!text && (
