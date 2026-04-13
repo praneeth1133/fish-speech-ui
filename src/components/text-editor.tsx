@@ -6,6 +6,7 @@ import { Sparkles, Loader2, Wand2, Users } from "lucide-react";
 import { useTTSSettingsStore } from "@/lib/tts-settings-store";
 import { ExpressionPicker } from "@/components/expression-picker";
 import { BatchPipeline } from "@/components/batch-pipeline";
+import { QueuePanel } from "@/components/queue-panel";
 import { insertTagAtCursor } from "@/lib/expression-tags";
 
 const PROMPT_SUGGESTIONS = [
@@ -135,6 +136,9 @@ export function TextEditor() {
 
         {/* Multi-voice pipeline — only renders when a batch is active or recently finished */}
         <BatchPipeline />
+
+        {/* Queue — always visible below the action area */}
+        <QueuePanel />
 
         {/* Prompt suggestions - only when no text */}
         {!text && (
