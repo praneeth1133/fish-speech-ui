@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { LANGUAGES, COUNTRIES, AGE_BUCKETS, VOICE_NAME_MAP } from "@/lib/voice-names";
+import { audioBufferToWav } from "@/lib/wav-encoder";
 
 interface DBVoice {
   id: string;
@@ -95,25 +96,45 @@ export default function VoicesPage() {
     fetchVoices();
   }, [fetchVoices]);
 
+  // Convert any audio blob to WAV so the Fish Speech backend can always read it.
+  // The backend uses torchaudio which may not support webm/mp3/ogg depending on
+  // the ffmpeg build. WAV always works.
+  const ensureWav = async (blob: Blob): Promise<Blob> => {
+    // If it's already a WAV, skip conversion
+    if (blob.type === "audio/wav" || blob.type === "audio/wave") return blob;
+    try {
+      const ctx = new (window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext)();
+      const arrayBuffer = await blob.arrayBuffer();
+      const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+      await ctx.close();
+      return audioBufferToWav(decoded);
+    } catch (err) {
+      console.warn("WAV conversion failed, sending original:", err);
+      return blob; // fallback: send as-is and hope the backend handles it
+    }
+  };
+
   // Shared submit logic
   const submitVoice = async (
     name: string,
     description: string,
     referenceText: string,
     audioBlob: Blob,
-    audioFileName: string
+    _audioFileName: string
   ) => {
     setIsCreating(true);
     try {
+      // Always convert to WAV for backend compatibility
+      const wavBlob = await ensureWav(audioBlob);
       const formData = new FormData();
       formData.append("name", name.trim());
       formData.append("description", description);
       formData.append("reference_text", referenceText);
       formData.append(
         "audio",
-        new File([audioBlob], audioFileName, {
-          type: audioBlob.type || "audio/wav",
-        })
+        new File([wavBlob], "voice.wav", { type: "audio/wav" })
       );
       const res = await fetch("/api/voices", {
         method: "POST",
