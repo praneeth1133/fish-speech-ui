@@ -39,7 +39,7 @@ export async function GET() {
       ageBucket: info?.ageBucket || "adult",
       age: info?.age ?? null,
       source: info?.source || "fish-speech-builtin",
-      previewUrl: `/previews/${refId}.wav`,
+      previewUrl: `/api/voice-preview/${refId}`,
       description: "",
       reference_text: "",
       is_backend_ref: true,
