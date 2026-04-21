@@ -80,7 +80,7 @@ export async function POST(request: Request) {
   try {
     const client = new Anthropic({ apiKey });
     const message = await client.messages.create({
-      model: "claude-3-haiku-20240307",
+      model: "claude-haiku-4-5",
       max_tokens: Math.min(Math.ceil(text.length * 2), 4096),
       system: SYSTEM_PROMPT,
       messages: [
