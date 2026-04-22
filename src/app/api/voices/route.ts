@@ -7,16 +7,33 @@ import { VOICE_NAME_MAP, getLanguageFromId } from "@/lib/voice-names";
  */
 export async function GET() {
   let referenceIds: string[] = [];
+  const mtimes: Record<string, number> = {};
   try {
-    const res = await backendFetch("/v1/references/list", {
+    // Prefer the detailed endpoint so we have mtimes for sorting.
+    const detailed = await backendFetch("/v1/references/list-detailed", {
       method: "GET",
       timeoutMs: 10_000,
     });
-    if (res.ok) {
-      const buffer = await res.arrayBuffer();
-      const { unpack } = await import("msgpackr");
-      const data = unpack(new Uint8Array(buffer)) as { reference_ids?: string[] };
-      referenceIds = data.reference_ids || [];
+    if (detailed.ok) {
+      const data = (await detailed.json()) as {
+        references?: { id: string; mtime: number }[];
+      };
+      for (const e of data.references || []) {
+        referenceIds.push(e.id);
+        mtimes[e.id] = e.mtime || 0;
+      }
+    } else {
+      // Fallback: old list endpoint (no mtimes)
+      const res = await backendFetch("/v1/references/list", {
+        method: "GET",
+        timeoutMs: 10_000,
+      });
+      if (res.ok) {
+        const buffer = await res.arrayBuffer();
+        const { unpack } = await import("msgpackr");
+        const data = unpack(new Uint8Array(buffer)) as { reference_ids?: string[] };
+        referenceIds = data.reference_ids || [];
+      }
     }
   } catch (err) {
     console.error("Failed to list references:", err);
@@ -43,6 +60,7 @@ export async function GET() {
       description: "",
       reference_text: "",
       is_backend_ref: true,
+      mtime: mtimes[refId] || 0,
     };
   });
 

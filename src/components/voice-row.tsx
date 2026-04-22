@@ -3,7 +3,8 @@
 import { motion } from "framer-motion";
 import { User, UserRound } from "lucide-react";
 import { VoicePreviewPlayer } from "./voice-preview-player";
-import { LANGUAGE_AVATAR_BG, COUNTRIES } from "@/lib/voice-names";
+import { VoiceAvatar } from "./voice-avatar";
+import { COUNTRIES } from "@/lib/voice-names";
 import type { EnrichedVoice } from "./voice-card";
 
 interface VoiceRowProps {
@@ -14,41 +15,46 @@ interface VoiceRowProps {
 }
 
 /**
- * List-row voice card (ElevenLabs "My Voices" style).
- * Columns: avatar · name + tagline · language · age · play · — keeps all the
- * functionality of the grid card.
+ * List-row voice card (ElevenLabs "My Voices" style) with a unique gradient
+ * avatar, springy enter animation, and subtle hover lift.
  */
 export function VoiceRow({ voice, isSelected, onSelect, index = 0 }: VoiceRowProps) {
-  const lang = (voice.language || "english").toLowerCase();
-  const avatarBg = LANGUAGE_AVATAR_BG[lang] || LANGUAGE_AVATAR_BG.english;
   const country = voice.countryCode
     ? COUNTRIES.find((c) => c.code === voice.countryCode)
     : null;
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.18, delay: Math.min(index * 0.01, 0.2) }}
+      layout
+      initial={{ opacity: 0, y: 10, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.96 }}
+      transition={{
+        type: "spring",
+        stiffness: 260,
+        damping: 26,
+        delay: Math.min(index * 0.015, 0.25),
+      }}
+      whileHover={{ backgroundColor: "var(--accent)", transition: { duration: 0.15 } }}
       onClick={() => onSelect(voice.id)}
       className={`
-        group grid cursor-pointer items-center gap-3 px-4 py-3 border-b border-border/50 transition-colors
+        group grid cursor-pointer items-center gap-3 px-4 py-3 border-b border-border/50
         grid-cols-[minmax(220px,2fr)_minmax(140px,1fr)_minmax(90px,0.7fr)_auto_auto]
-        ${isSelected ? "bg-accent/60" : "hover:bg-accent/30"}
+        ${isSelected ? "bg-accent/60" : ""}
       `}
     >
       {/* Avatar + Name + Tagline */}
       <div className="flex items-center gap-3 min-w-0">
-        <div
-          className={`flex-shrink-0 w-9 h-9 rounded-full ${avatarBg} flex items-center justify-center text-primary-foreground text-[10px] font-bold`}
-        >
-          {voice.avatarInitials || "??"}
-        </div>
+        <VoiceAvatar id={voice.id} initials={voice.avatarInitials || "??"} size="md" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1">
-            <span className="text-sm font-medium text-foreground truncate">
+            <motion.span
+              className="text-sm font-medium text-foreground truncate"
+              whileHover={{ x: 2 }}
+              transition={{ type: "spring", stiffness: 400, damping: 20 }}
+            >
               {voice.displayName || voice.name}
-            </span>
+            </motion.span>
             {voice.gender === "male" ? (
               <User className="h-3 w-3 text-blue-400/60 flex-shrink-0" />
             ) : (
@@ -85,7 +91,6 @@ export function VoiceRow({ voice, isSelected, onSelect, index = 0 }: VoiceRowPro
         )}
       </div>
 
-      {/* Spacer for menu column alignment */}
       <div className="w-6 flex-shrink-0" />
     </motion.div>
   );

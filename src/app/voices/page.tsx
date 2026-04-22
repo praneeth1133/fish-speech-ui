@@ -32,10 +32,12 @@ import {
   Globe,
   Sparkles,
   Clock,
+  Flame,
 } from "lucide-react";
 import { toast } from "sonner";
 import { LANGUAGES, COUNTRIES, AGE_BUCKETS, VOICE_NAME_MAP } from "@/lib/voice-names";
 import { audioBufferToWav } from "@/lib/wav-encoder";
+import { listHistory } from "@/lib/idb";
 
 interface DBVoice {
   id: string;
@@ -56,11 +58,14 @@ interface DBVoice {
   ageBucket?: "kid" | "young" | "adult" | "older";
   age?: number | null;
   source?: "fish-speech-builtin" | "vctk";
+  /** File mtime (epoch seconds) of the reference on the backend */
+  mtime?: number;
 }
 
 export default function VoicesPage() {
   const [voices, setVoices] = useState<DBVoice[]>([]);
   const [references, setReferences] = useState<string[]>([]);
+  const [history, setHistory] = useState<Array<{ voice_id: string | null }>>([]);
 
   // Record dialog state
   const [isRecordOpen, setIsRecordOpen] = useState(false);
@@ -96,6 +101,13 @@ export default function VoicesPage() {
   useEffect(() => {
     fetchVoices();
   }, [fetchVoices]);
+
+  // Load recent generation history once for the "Most Used" section.
+  useEffect(() => {
+    listHistory(500)
+      .then((items) => setHistory(items.map((h) => ({ voice_id: h.voice_id }))))
+      .catch(() => setHistory([]));
+  }, []);
 
   // Convert any audio blob to WAV so the Fish Speech backend can always read it.
   // The backend uses torchaudio which may not support webm/mp3/ogg depending on
@@ -214,16 +226,29 @@ export default function VoicesPage() {
   const dbVoices = voices.filter((v) => !v.is_backend_ref);
   const backendVoices = voices.filter((v) => v.is_backend_ref);
 
-  // Identify "new" voices = voices NOT in the hardcoded VOICE_NAME_MAP
-  // These are custom or recently added via record/upload
+  // "New Voices" = 10 most recently added/updated references (by file mtime
+  // on the backend). Sort descending so the newest is first.
   const newVoices = useMemo(() => {
-    return backendVoices
-      .filter((v) => {
-        const refName = v.name;
-        return !(refName in VOICE_NAME_MAP);
-      })
+    return [...backendVoices]
+      .sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
       .slice(0, 10);
   }, [backendVoices]);
+
+  // "Most Used" = top 10 voices by generation count (from history in IndexedDB).
+  const mostUsedVoices = useMemo(() => {
+    if (!Array.isArray(history) || history.length === 0) return [];
+    const counts: Record<string, number> = {};
+    for (const h of history) {
+      const vid = h?.voice_id;
+      if (vid) counts[vid] = (counts[vid] || 0) + 1;
+    }
+    return backendVoices
+      .map((v) => ({ voice: v, count: counts[v.name] || 0 }))
+      .filter((x) => x.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10)
+      .map((x) => x.voice);
+  }, [backendVoices, history]);
 
   // Filter backend voices
   const filteredBackendVoices = backendVoices.filter((v) => {
@@ -451,7 +476,36 @@ export default function VoicesPage() {
 
       <div className="flex-1 overflow-auto p-4 sm:p-6">
         <div className="max-w-6xl mx-auto space-y-8">
-          {/* New Voices section — shows latest custom voices not in the hardcoded map */}
+          {/* Most Used section — top voices by generation count from local history */}
+          {mostUsedVoices.length > 0 && (
+            <section>
+              <h3 className="text-sm font-medium text-foreground/50 mb-3 flex items-center gap-2">
+                <Flame className="h-4 w-4 text-orange-400" />
+                Most Used
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                  {mostUsedVoices.length}
+                </Badge>
+              </h3>
+              <div className="border border-border/50 rounded-lg overflow-hidden bg-card/30">
+                {mostUsedVoices.map((voice, i) => (
+                  <VoiceRow
+                    key={`mu-${voice.id}`}
+                    voice={voice as EnrichedVoice}
+                    isSelected={false}
+                    onSelect={() => {
+                      toast.info(`${voice.displayName || voice.name}`, {
+                        description: "Go to Text to Speech to use this voice",
+                        icon: "🎤",
+                      });
+                    }}
+                    index={i}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* New Voices section — latest backend references by mtime */}
           {newVoices.length > 0 && (
             <section>
               <h3 className="text-sm font-medium text-foreground/50 mb-3 flex items-center gap-2">
