@@ -16,6 +16,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { VoiceCard, type EnrichedVoice } from "@/components/voice-card";
+import { VoiceRow } from "@/components/voice-row";
 import {
   VoiceRecorder,
   type VoiceRecorderState,
@@ -460,9 +461,9 @@ export default function VoicesPage() {
                   {newVoices.length}
                 </Badge>
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+              <div className="border border-border/50 rounded-lg overflow-hidden bg-card/30">
                 {newVoices.map((voice, i) => (
-                  <VoiceCard
+                  <VoiceRow
                     key={voice.id}
                     voice={voice as EnrichedVoice}
                     isSelected={false}
@@ -682,11 +683,11 @@ export default function VoicesPage() {
               </div>
             </div>
 
-            {/* Voice grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {/* Voice list (ElevenLabs-style rows) */}
+            <div className="border border-border/50 rounded-lg overflow-hidden bg-card/30">
               <AnimatePresence mode="popLayout">
                 {filteredBackendVoices.map((voice, i) => (
-                  <VoiceCard
+                  <VoiceRow
                     key={voice.id}
                     voice={voice as EnrichedVoice}
                     isSelected={false}

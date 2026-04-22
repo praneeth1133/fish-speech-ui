@@ -11,9 +11,11 @@ let currentStopCallback: (() => void) | null = null;
 interface VoicePreviewPlayerProps {
   src: string;
   compact?: boolean;
+  /** If true, render only the play button (no progress bar). For list views. */
+  iconOnly?: boolean;
 }
 
-export function VoicePreviewPlayer({ src, compact }: VoicePreviewPlayerProps) {
+export function VoicePreviewPlayer({ src, compact, iconOnly }: VoicePreviewPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -87,8 +89,20 @@ export function VoicePreviewPlayer({ src, compact }: VoicePreviewPlayerProps) {
       }
       currentlyPlaying = audio;
       currentStopCallback = stopPlaying;
-      audio.play().catch(() => setIsPlaying(false));
       setIsPlaying(true);
+      // If a previous preload attempt errored (e.g. 502 during warmup),
+      // force a fresh load before play so the user's click always retries.
+      if (audio.error || audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) {
+        audio.load();
+      }
+      audio.play().catch((err) => {
+        console.warn("Voice preview play failed:", err);
+        setIsPlaying(false);
+        if (currentlyPlaying === audio) {
+          currentlyPlaying = null;
+          currentStopCallback = null;
+        }
+      });
     }
   };
 
@@ -121,23 +135,25 @@ export function VoicePreviewPlayer({ src, compact }: VoicePreviewPlayerProps) {
         )}
       </button>
 
-      <div className="flex-1 flex items-center gap-2 min-w-0">
-        {/* Progress bar */}
-        <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
-          <motion.div
-            className="h-full rounded-full bg-gradient-to-r from-foreground/30 to-foreground/50"
-            initial={{ width: 0 }}
-            animate={{ width: `${progress}%` }}
-            transition={{ duration: 0.1, ease: "linear" }}
-          />
-        </div>
+      {!iconOnly && (
+        <div className="flex-1 flex items-center gap-2 min-w-0">
+          {/* Progress bar */}
+          <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
+            <motion.div
+              className="h-full rounded-full bg-gradient-to-r from-foreground/30 to-foreground/50"
+              initial={{ width: 0 }}
+              animate={{ width: `${progress}%` }}
+              transition={{ duration: 0.1, ease: "linear" }}
+            />
+          </div>
 
-        {!compact && (
-          <span className="text-[10px] text-muted-foreground font-mono tabular-nums flex-shrink-0">
-            {formatTime(duration)}
-          </span>
-        )}
-      </div>
+          {!compact && (
+            <span className="text-[10px] text-muted-foreground font-mono tabular-nums flex-shrink-0">
+              {formatTime(duration)}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
