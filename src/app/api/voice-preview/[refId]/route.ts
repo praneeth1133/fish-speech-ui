@@ -27,17 +27,41 @@ export async function GET(
     return Response.json({ error: "Invalid voice ID" }, { status: 400 });
   }
 
-  // Check for pre-baked static preview first
+  // Check for pre-baked static preview first (used for the 75 built-in voices)
   const staticPath = join(process.cwd(), "public", "previews", `${refId}.wav`);
   if (existsSync(staticPath)) {
-    // Redirect to the static file — Vercel CDN will serve it fast
     return new Response(null, {
       status: 307,
       headers: { Location: `/previews/${refId}.wav` },
     });
   }
 
-  // On-demand: generate via TTS
+  // Second: the backend stores the original reference audio on disk as
+  // references/<refId>/sample.wav. Serve that directly — instant, no GPU work.
+  try {
+    const sampleRes = await backendFetch(
+      `/v1/references/${encodeURIComponent(refId)}/sample`,
+      { method: "GET", timeoutMs: 15_000 }
+    );
+    if (sampleRes.ok) {
+      const audioBuffer = await sampleRes.arrayBuffer();
+      return new Response(audioBuffer, {
+        headers: {
+          "Content-Type": sampleRes.headers.get("Content-Type") || "audio/wav",
+          "Content-Length": String(audioBuffer.byteLength),
+          "Accept-Ranges": "bytes",
+          "Cache-Control": "public, max-age=86400, s-maxage=86400",
+        },
+      });
+    }
+    // 404 means the reference has no static sample (e.g. user-recorded voice
+    // registered without the sample surviving on disk). Fall through to TTS.
+  } catch (err) {
+    console.warn(`Static sample fetch failed for ${refId}:`, err);
+    // Fall through to TTS generation below.
+  }
+
+  // On-demand TTS fallback (only used if no static sample exists)
   const previewText = "Hello, this is a voice preview. Nice to meet you!";
 
   try {
@@ -52,7 +76,7 @@ export async function GET(
       timeoutMs: 55_000,
     });
 
-    if (!upstream.ok || !upstream.body) {
+    if (!upstream.ok) {
       const errorText = await upstream.text().catch(() => "");
       console.error(`Preview failed for ${refId}: ${upstream.status} ${errorText}`);
       return Response.json(
@@ -61,9 +85,16 @@ export async function GET(
       );
     }
 
-    return new Response(upstream.body, {
+    // Buffer the full WAV so the browser gets a complete file with
+    // Content-Length — streamed chunked audio won't reliably play in
+    // <audio> elements because the RIFF size field stays unknown.
+    const audioBuffer = await upstream.arrayBuffer();
+
+    return new Response(audioBuffer, {
       headers: {
         "Content-Type": upstream.headers.get("Content-Type") || "audio/wav",
+        "Content-Length": String(audioBuffer.byteLength),
+        "Accept-Ranges": "bytes",
         "Cache-Control": "public, max-age=3600, s-maxage=3600",
       },
     });
