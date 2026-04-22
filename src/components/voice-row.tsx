@@ -12,16 +12,22 @@ interface VoiceRowProps {
   isSelected: boolean;
   onSelect: (voiceId: string) => void;
   index?: number;
+  /** Slim layout for narrow panels (hides language + age columns). */
+  compact?: boolean;
 }
 
 /**
  * List-row voice card (ElevenLabs "My Voices" style) with a unique gradient
  * avatar, springy enter animation, and subtle hover lift.
  */
-export function VoiceRow({ voice, isSelected, onSelect, index = 0 }: VoiceRowProps) {
+export function VoiceRow({ voice, isSelected, onSelect, index = 0, compact = false }: VoiceRowProps) {
   const country = voice.countryCode
     ? COUNTRIES.find((c) => c.code === voice.countryCode)
     : null;
+
+  const gridCols = compact
+    ? "grid-cols-[1fr_auto]"
+    : "grid-cols-[minmax(220px,2fr)_minmax(140px,1fr)_minmax(90px,0.7fr)_auto_auto]";
 
   return (
     <motion.div
@@ -38,8 +44,8 @@ export function VoiceRow({ voice, isSelected, onSelect, index = 0 }: VoiceRowPro
       whileHover={{ backgroundColor: "var(--accent)", transition: { duration: 0.15 } }}
       onClick={() => onSelect(voice.id)}
       className={`
-        group grid cursor-pointer items-center gap-3 px-4 py-3 border-b border-border/50
-        grid-cols-[minmax(220px,2fr)_minmax(140px,1fr)_minmax(90px,0.7fr)_auto_auto]
+        group grid cursor-pointer items-center gap-3 ${compact ? "px-3 py-2.5" : "px-4 py-3"} border-b border-border/50
+        ${gridCols}
         ${isSelected ? "bg-accent/60" : ""}
       `}
     >
@@ -69,20 +75,24 @@ export function VoiceRow({ voice, isSelected, onSelect, index = 0 }: VoiceRowPro
         </div>
       </div>
 
-      {/* Language + country flag */}
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
-        {country && (
-          <span className="flex-shrink-0 text-base leading-none" title={country.name}>
-            {country.flag}
-          </span>
-        )}
-        <span className="truncate">{voice.language || "English"}</span>
-      </div>
+      {!compact && (
+        <>
+          {/* Language + country flag */}
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
+            {country && (
+              <span className="flex-shrink-0 text-base leading-none" title={country.name}>
+                {country.flag}
+              </span>
+            )}
+            <span className="truncate">{voice.language || "English"}</span>
+          </div>
 
-      {/* Age bucket */}
-      <div className="text-xs text-muted-foreground capitalize hidden sm:block">
-        {voice.ageBucket || ""}
-      </div>
+          {/* Age bucket */}
+          <div className="text-xs text-muted-foreground capitalize hidden sm:block">
+            {voice.ageBucket || ""}
+          </div>
+        </>
+      )}
 
       {/* Play button — sample preview */}
       <div onClick={(e) => e.stopPropagation()} className="flex-shrink-0">
@@ -91,7 +101,7 @@ export function VoiceRow({ voice, isSelected, onSelect, index = 0 }: VoiceRowPro
         )}
       </div>
 
-      <div className="w-6 flex-shrink-0" />
+      {!compact && <div className="w-6 flex-shrink-0" />}
     </motion.div>
   );
 }

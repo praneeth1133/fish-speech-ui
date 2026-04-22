@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, Sparkles, Globe, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { VoiceCard, type EnrichedVoice } from "./voice-card";
+import { type EnrichedVoice } from "./voice-card";
+import { VoiceRow } from "./voice-row";
 import { LANGUAGES } from "@/lib/voice-names";
 
 const GENDER_OPTIONS = ["all", "male", "female"] as const;
@@ -43,19 +44,23 @@ export function VoicePicker({
   }, [fetchVoices]);
 
   const filteredVoices = useMemo(() => {
-    return voices.filter((v) => {
-      if (!v.is_backend_ref) return false;
-      const matchesSearch =
-        !search ||
-        (v.displayName || v.name).toLowerCase().includes(search.toLowerCase()) ||
-        (v.language || "").toLowerCase().includes(search.toLowerCase());
-      const matchesLanguage =
-        selectedLanguage === "all" ||
-        (v.language || "").toLowerCase() === selectedLanguage;
-      const matchesGender =
-        selectedGender === "all" || v.gender === selectedGender;
-      return matchesSearch && matchesLanguage && matchesGender;
-    });
+    return voices
+      .filter((v) => {
+        if (!v.is_backend_ref) return false;
+        const matchesSearch =
+          !search ||
+          (v.displayName || v.name).toLowerCase().includes(search.toLowerCase()) ||
+          (v.language || "").toLowerCase().includes(search.toLowerCase());
+        const matchesLanguage =
+          selectedLanguage === "all" ||
+          (v.language || "").toLowerCase() === selectedLanguage;
+        const matchesGender =
+          selectedGender === "all" || v.gender === selectedGender;
+        return matchesSearch && matchesLanguage && matchesGender;
+      })
+      // Newest (most recently added) voices first
+      .sort((a, b) => ((b as EnrichedVoice & { mtime?: number }).mtime || 0)
+        - ((a as EnrichedVoice & { mtime?: number }).mtime || 0));
   }, [voices, search, selectedLanguage, selectedGender]);
 
   const languageCounts = useMemo(() => {
@@ -147,42 +152,42 @@ export function VoicePicker({
         </span>
       </div>
 
-      {/* Voice grid */}
-      <div className="grid grid-cols-2 gap-2">
+      {/* Voice list (matches the main Voice Library layout) */}
+      <div className="border border-border/50 rounded-lg overflow-hidden bg-card/30">
         {showDefaultVoice && (
           <motion.div
-            initial={{ opacity: 0, y: 12 }}
+            initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
+            whileHover={{ backgroundColor: "var(--accent)", transition: { duration: 0.15 } }}
             onClick={() => onSelectVoice("default")}
             className={`
-              cursor-pointer rounded-xl border p-3 transition-all duration-200
-              ${
-                selectedVoice === "default"
-                  ? "border-primary/30 bg-accent ring-1 ring-primary/20"
-                  : "border-border bg-card hover:border-border/80 hover:bg-accent/50"
-              }
+              grid cursor-pointer items-center gap-3 px-3 py-2.5 border-b border-border/50
+              grid-cols-[1fr_auto]
+              ${selectedVoice === "default" ? "bg-accent/60" : ""}
             `}
           >
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-full bg-muted flex items-center justify-center">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
                 <Globe className="h-4 w-4 text-muted-foreground" />
               </div>
-              <div>
-                <p className="text-sm font-medium text-foreground">Default</p>
-                <p className="text-[10px] text-muted-foreground">No voice cloning</p>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-foreground truncate">Default</p>
+                <p className="text-xs text-muted-foreground truncate mt-0.5">No voice cloning</p>
               </div>
             </div>
+            <div className="w-7" />
           </motion.div>
         )}
 
         <AnimatePresence mode="popLayout">
           {filteredVoices.map((voice, i) => (
-            <VoiceCard
+            <VoiceRow
               key={voice.id}
               voice={voice}
               isSelected={selectedVoice === voice.id}
               onSelect={onSelectVoice}
               index={i}
+              compact
             />
           ))}
         </AnimatePresence>
