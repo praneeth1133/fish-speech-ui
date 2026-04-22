@@ -9,8 +9,8 @@ export interface VoiceNameInfo {
   country: string;
   /** 2-letter country code used for filtering */
   countryCode: string;
-  /** Approximate age bucket: "young" (<25), "adult" (25-39), "older" (40+) */
-  ageBucket: "young" | "adult" | "older";
+  /** Approximate age bucket: "kid" (<15), "young" (15-24), "adult" (25-39), "older" (40+) */
+  ageBucket: "kid" | "young" | "adult" | "older";
   /** Exact age if known (from dataset), otherwise null */
   age: number | null;
   /** Source dataset so we can show attribution (VCTK voices need CC-BY credit) */
@@ -155,6 +155,25 @@ export const VOICE_NAME_MAP: Record<string, VoiceNameInfo> = {
 
   // South Africa
   "vctk-za-female-adult-p314": { displayName: "Leah", language: "English", gender: "female", languageCode: "en", avatarInitials: "LE", tagline: "South African", country: "South Africa", countryCode: "za", ageBucket: "adult", age: 26, source: "vctk" },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Kid voices (15) — pitch-shifted VCTK young adults to sound child-like.
+  // ─────────────────────────────────────────────────────────────────────────
+  "kid-us-girl-1":       { displayName: "Lily",   language: "English", gender: "female", languageCode: "en", avatarInitials: "LI", tagline: "Cheerful US girl",     country: "United States",    countryCode: "us", ageBucket: "kid", age: 9,  source: "vctk" },
+  "kid-us-girl-2":       { displayName: "Chloe",  language: "English", gender: "female", languageCode: "en", avatarInitials: "CH", tagline: "Gentle US girl",       country: "United States",    countryCode: "us", ageBucket: "kid", age: 10, source: "vctk" },
+  "kid-us-boy-1":        { displayName: "Tommy",  language: "English", gender: "male",   languageCode: "en", avatarInitials: "TO", tagline: "Friendly US boy",      country: "United States",    countryCode: "us", ageBucket: "kid", age: 9,  source: "vctk" },
+  "kid-uk-girl-1":       { displayName: "Poppy",  language: "English", gender: "female", languageCode: "en", avatarInitials: "PO", tagline: "Proper UK girl",       country: "United Kingdom",   countryCode: "uk", ageBucket: "kid", age: 8,  source: "vctk" },
+  "kid-uk-girl-2":       { displayName: "Daisy",  language: "English", gender: "female", languageCode: "en", avatarInitials: "DA", tagline: "Warm UK girl",         country: "United Kingdom",   countryCode: "uk", ageBucket: "kid", age: 9,  source: "vctk" },
+  "kid-uk-boy-1":        { displayName: "Harry",  language: "English", gender: "male",   languageCode: "en", avatarInitials: "HA", tagline: "Polite UK boy",        country: "United Kingdom",   countryCode: "uk", ageBucket: "kid", age: 8,  source: "vctk" },
+  "kid-uk-boy-2":        { displayName: "Leo",    language: "English", gender: "male",   languageCode: "en", avatarInitials: "LE", tagline: "Curious UK boy",       country: "United Kingdom",   countryCode: "uk", ageBucket: "kid", age: 10, source: "vctk" },
+  "kid-canada-girl-1":   { displayName: "Mia",    language: "English", gender: "female", languageCode: "en", avatarInitials: "MI", tagline: "Bright Canadian girl", country: "Canada",           countryCode: "ca", ageBucket: "kid", age: 9,  source: "vctk" },
+  "kid-canada-boy-1":    { displayName: "Noah",   language: "English", gender: "male",   languageCode: "en", avatarInitials: "NO", tagline: "Upbeat Canadian boy",  country: "Canada",           countryCode: "ca", ageBucket: "kid", age: 10, source: "vctk" },
+  "kid-ireland-girl-1":  { displayName: "Aisling",language: "English", gender: "female", languageCode: "en", avatarInitials: "AI", tagline: "Bright Irish girl",    country: "Ireland",          countryCode: "ie", ageBucket: "kid", age: 9,  source: "vctk" },
+  "kid-ireland-boy-1":   { displayName: "Rory",   language: "English", gender: "male",   languageCode: "en", avatarInitials: "RO", tagline: "Lively N. Irish boy",  country: "Northern Ireland", countryCode: "ni", ageBucket: "kid", age: 10, source: "vctk" },
+  "kid-scotland-girl-1": { displayName: "Isla",   language: "English", gender: "female", languageCode: "en", avatarInitials: "IS", tagline: "Sweet Scottish girl",  country: "Scotland",         countryCode: "sc", ageBucket: "kid", age: 9,  source: "vctk" },
+  "kid-scotland-boy-1":  { displayName: "Finn",   language: "English", gender: "male",   languageCode: "en", avatarInitials: "FI", tagline: "Brave Scottish boy",   country: "Scotland",         countryCode: "sc", ageBucket: "kid", age: 10, source: "vctk" },
+  "kid-india-girl-1":    { displayName: "Anaya",  language: "English", gender: "female", languageCode: "en", avatarInitials: "AN", tagline: "Bright Indian girl",   country: "India",            countryCode: "in", ageBucket: "kid", age: 9,  source: "vctk" },
+  "kid-india-boy-1":     { displayName: "Arjun",  language: "English", gender: "male",   languageCode: "en", avatarInitials: "AR", tagline: "Smart Indian boy",     country: "India",            countryCode: "in", ageBucket: "kid", age: 10, source: "vctk" },
 };
 
 export function getVoiceDisplayInfo(voiceId: string): VoiceNameInfo | null {
@@ -189,6 +208,7 @@ export const COUNTRIES = [
 ] as const;
 
 export const AGE_BUCKETS = [
+  { id: "kid", label: "Kid", hint: "Child voices" },
   { id: "young", label: "Young", hint: "Under 25" },
   { id: "adult", label: "Adult", hint: "25–39" },
   { id: "older", label: "Older", hint: "40+" },

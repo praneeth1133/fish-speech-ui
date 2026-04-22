@@ -18,7 +18,7 @@ export interface EnrichedVoice {
   is_backend_ref?: boolean;
   country?: string;
   countryCode?: string;
-  ageBucket?: "young" | "adult" | "older";
+  ageBucket?: "kid" | "young" | "adult" | "older";
   age?: number | null;
   source?: "fish-speech-builtin" | "vctk";
 }

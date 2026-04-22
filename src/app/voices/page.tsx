@@ -52,7 +52,7 @@ interface DBVoice {
   previewUrl?: string;
   country?: string;
   countryCode?: string;
-  ageBucket?: "young" | "adult" | "older";
+  ageBucket?: "kid" | "young" | "adult" | "older";
   age?: number | null;
   source?: "fish-speech-builtin" | "vctk";
 }
