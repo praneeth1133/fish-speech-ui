@@ -143,19 +143,30 @@ export function QueueProvider() {
           }
           if (blobs.length === 0) return;
 
-          const combined = await concatAudioBlobs(blobs, { gapSeconds: 0.35 });
+          // Respect the per-batch normalize flag so users can opt out of
+          // automatic level-matching if they want raw per-character audio.
+          const normalize = ordered[0]?.batch_normalize ?? true;
+          const combined = await concatAudioBlobs(blobs, {
+            gapSeconds: 0.35,
+            normalizeVolume: normalize,
+          });
 
           // Build a human-readable preview text
           const combinedText = ordered
             .map((j) => `${j.character ? j.character + ": " : ""}${j.text}`)
             .join("\n");
 
+          // Prefer the title baked in by generateMultiVoice; fall back to the
+          // batch id if some old job is missing it.
+          const storyTitle = ordered[0]?.batch_title?.trim()
+            || `multi-voice-${batchId.slice(0, 8)}`;
+
           const newId = crypto.randomUUID();
           await addHistoryItem({
             id: newId,
             text: combinedText.slice(0, 500),
             voice_id: null,
-            voice_name: `Multi-Voice (${ordered.length} segments)`,
+            voice_name: storyTitle,
             format: "wav",
             settings: null,
             created_at: new Date().toISOString(),
@@ -179,7 +190,7 @@ export function QueueProvider() {
                 if (!url) return;
                 const a = document.createElement("a");
                 a.href = url;
-                a.download = `fish-speech-multi-${newId.slice(0, 8)}.wav`;
+                a.download = `${storyTitle}.wav`;
                 a.click();
                 setTimeout(() => URL.revokeObjectURL(url), 60_000);
               },

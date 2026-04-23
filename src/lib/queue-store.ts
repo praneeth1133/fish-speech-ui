@@ -39,6 +39,12 @@ export interface QueueJob {
   batch_size: number | null;
   /** Character label for this segment (e.g., "Alice", "Narrator"). */
   character: string | null;
+  /** Optional story title — derived from the first few words of the script.
+   * Used as the default download filename for the merged audio. */
+  batch_title: string | null;
+  /** When true, merged audio applies RMS normalization across segments so
+   * characters speak at comparable loudness. */
+  batch_normalize: boolean;
 }
 
 export interface AddJobParams {
@@ -57,6 +63,8 @@ export interface AddJobParams {
   batch_order?: number;
   batch_size?: number;
   character?: string;
+  batch_title?: string;
+  batch_normalize?: boolean;
 }
 
 export interface BatchResult {
@@ -153,6 +161,8 @@ export const useQueueStore = create<QueueState>()(
           batch_order: params.batch_order ?? null,
           batch_size: params.batch_size ?? null,
           character: params.character || null,
+          batch_title: params.batch_title || null,
+          batch_normalize: params.batch_normalize ?? true,
         };
         set((s) => ({ jobs: [...s.jobs, job], version: s.version + 1 }));
         return job;

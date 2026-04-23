@@ -12,6 +12,45 @@ import { audioBufferToWav } from "./wav-encoder";
 export interface ConcatOptions {
   /** Gap between segments in seconds. Default 0.3s. */
   gapSeconds?: number;
+  /**
+   * When true, each segment is RMS-normalized so every character speaks at
+   * roughly the same perceived loudness. Default true. Especially important
+   * for multi-voice generations where different voice models output very
+   * different base amplitudes.
+   */
+  normalizeVolume?: boolean;
+  /**
+   * Target RMS amplitude in linear [0, 1]. ~0.1 is around -20 dBFS, a safe
+   * speech level that leaves ~20 dB of headroom before clipping. Lower = quieter.
+   */
+  targetRms?: number;
+}
+
+/** Compute the RMS (root-mean-square) amplitude of a mono buffer. */
+function computeRms(samples: Float32Array): number {
+  if (samples.length === 0) return 0;
+  let sumSquares = 0;
+  // Sparse sample: scanning every 4th frame is plenty accurate and ~4× faster
+  const step = 4;
+  let counted = 0;
+  for (let i = 0; i < samples.length; i += step) {
+    const v = samples[i];
+    sumSquares += v * v;
+    counted++;
+  }
+  return Math.sqrt(sumSquares / counted);
+}
+
+/** Scale a buffer in place by `gain`, then soft-clip to [-0.98, 0.98] to
+ * guarantee no wrap-around in the int16 encoder. */
+function applyGainWithLimiter(samples: Float32Array, gain: number): void {
+  const ceiling = 0.98;
+  for (let i = 0; i < samples.length; i++) {
+    let v = samples[i] * gain;
+    if (v > ceiling) v = ceiling;
+    else if (v < -ceiling) v = -ceiling;
+    samples[i] = v;
+  }
 }
 
 /**
@@ -51,6 +90,21 @@ export async function concatAudioBlobs(
     const monoFloats: Float32Array[] = buffers.map((buf) =>
       bufferToMonoAtRate(buf, targetSampleRate)
     );
+
+    // Volume leveling: scale each segment toward a common RMS so no character
+    // is dramatically louder/quieter than the others.
+    const normalize = options.normalizeVolume ?? true;
+    if (normalize) {
+      const targetRms = options.targetRms ?? 0.1;
+      for (const seg of monoFloats) {
+        const rms = computeRms(seg);
+        if (rms < 1e-5) continue; // near silence — skip
+        const gain = targetRms / rms;
+        // Cap gain to avoid blowing up near-silent inputs by 50x
+        const safeGain = Math.min(gain, 4.0);
+        applyGainWithLimiter(seg, safeGain);
+      }
+    }
 
     const gapSamples = Math.floor(gapSeconds * targetSampleRate);
     const totalLength = monoFloats.reduce(

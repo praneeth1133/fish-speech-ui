@@ -4,11 +4,15 @@
  * Character → voice assignment dialog.
  *
  * Opens automatically when `characters` in the TTS store becomes non-null
- * (which happens after `identifyCharacters()` returns). Lists each character
- * alongside a dropdown of all available voices. When the user clicks
- * "Generate Audio", every segment is queued with its assigned voice under a
- * shared batch_id, and the queue-provider will auto-concat them into a
- * single history entry when the whole batch completes.
+ * (which happens after `identifyCharacters()` returns). For each character,
+ * the user sees a rich scrollable row of voice chips — each chip carries the
+ * voice's unique gradient avatar, a name, and a play button that instantly
+ * previews the reference sample (no TTS generation — the /sample endpoint
+ * returns the static WAV on disk in ~0.2s).
+ *
+ * A toggle at the bottom controls RMS volume leveling across characters
+ * (default ON) so the merged output doesn't have one voice dramatically
+ * louder than the rest.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -21,7 +25,11 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Users, Sparkles, Loader2, X } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { VoiceAvatar } from "@/components/voice-avatar";
+import { VoicePreviewPlayer } from "@/components/voice-preview-player";
+import { Users, Sparkles, Loader2, X, Check, Volume2 } from "lucide-react";
+import { motion } from "framer-motion";
 
 interface BackendVoice {
   id: string;
@@ -30,7 +38,11 @@ interface BackendVoice {
   language?: string;
   gender?: string;
   country?: string;
+  tagline?: string;
+  avatarInitials?: string;
+  previewUrl?: string;
   is_backend_ref?: boolean;
+  mtime?: number;
 }
 
 export function CharacterAssignment() {
@@ -40,6 +52,8 @@ export function CharacterAssignment() {
   const setCharacterVoice = useTTSSettingsStore((s) => s.setCharacterVoice);
   const clearCharacters = useTTSSettingsStore((s) => s.clearCharacters);
   const generateMultiVoice = useTTSSettingsStore((s) => s.generateMultiVoice);
+  const levelVolumes = useTTSSettingsStore((s) => s.levelCharacterVolumes);
+  const setLevelVolumes = useTTSSettingsStore((s) => s.setLevelCharacterVolumes);
 
   const [voices, setVoices] = useState<BackendVoice[]>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
@@ -55,9 +69,12 @@ export function CharacterAssignment() {
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;
-        const list: BackendVoice[] = (data.voices || []).filter(
-          (v: BackendVoice) => v.is_backend_ref
-        );
+        const list: BackendVoice[] = (data.voices || [])
+          .filter((v: BackendVoice) => v.is_backend_ref)
+          .sort(
+            (a: BackendVoice, b: BackendVoice) =>
+              (b.mtime || 0) - (a.mtime || 0)
+          );
         setVoices(list);
       })
       .catch(() => {
@@ -71,13 +88,10 @@ export function CharacterAssignment() {
     };
   }, [open]);
 
-  // Segments grouped per character for a quick preview count
   const segmentCountByCharacter = useMemo(() => {
     const counts: Record<string, number> = {};
     if (!segments) return counts;
-    for (const s of segments) {
-      counts[s.character] = (counts[s.character] || 0) + 1;
-    }
+    for (const s of segments) counts[s.character] = (counts[s.character] || 0) + 1;
     return counts;
   }, [segments]);
 
@@ -99,7 +113,7 @@ export function CharacterAssignment() {
         if (!next) clearCharacters();
       }}
     >
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-3xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Users className="h-4 w-4" />
@@ -110,17 +124,17 @@ export function CharacterAssignment() {
         <div className="space-y-4 pt-3">
           <p className="text-sm text-muted-foreground">
             AI found {characters.length} character
-            {characters.length === 1 ? "" : "s"} in your script. Pick a voice
-            for each one, then generate. Segments will be queued in order and
-            auto-combined into a single audio file when complete.
+            {characters.length === 1 ? "" : "s"} in your script. Pick a voice for
+            each — click the play button on any voice chip to hear its sample
+            instantly.
           </p>
 
           {loadingVoices ? (
-            <div className="flex items-center justify-center py-8">
+            <div className="flex items-center justify-center py-10">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+            <div className="space-y-4 max-h-[55vh] overflow-y-auto pr-2">
               {characters.map((char) => {
                 const assignment = assignments[char.name] || {
                   voice_id: null,
@@ -129,71 +143,114 @@ export function CharacterAssignment() {
                 return (
                   <div
                     key={char.name}
-                    className="flex items-center gap-3 p-3 rounded-lg border border-border bg-card"
+                    className="rounded-xl border border-border bg-card/60 p-3 space-y-3"
                   >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 shrink-0">
-                      <span className="text-xs font-semibold text-primary">
-                        {char.name.slice(0, 2).toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-medium truncate">
-                          {char.name}
-                        </p>
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                          {segmentCountByCharacter[char.name] || 0} line
-                          {segmentCountByCharacter[char.name] === 1 ? "" : "s"}
-                        </Badge>
+                    {/* Character header */}
+                    <div className="flex items-center gap-3">
+                      <VoiceAvatar
+                        id={`char-${char.name}`}
+                        initials={char.name.slice(0, 2).toUpperCase()}
+                        size="md"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold truncate">
+                            {char.name}
+                          </p>
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                            {segmentCountByCharacter[char.name] || 0} line
+                            {segmentCountByCharacter[char.name] === 1 ? "" : "s"}
+                          </Badge>
+                          {assignment.voice_id && (
+                            <Badge className="text-[10px] px-1.5 py-0 bg-primary/10 text-primary border-primary/20">
+                              <Check className="h-2.5 w-2.5 mr-0.5" />
+                              {assignment.voice_name}
+                            </Badge>
+                          )}
+                        </div>
+                        {char.description && (
+                          <p className="text-[11px] text-muted-foreground truncate mt-0.5">
+                            {char.description}
+                          </p>
+                        )}
                       </div>
-                      {char.description && (
-                        <p className="text-[11px] text-muted-foreground truncate">
-                          {char.description}
-                        </p>
-                      )}
                     </div>
-                    <select
-                      className="min-w-[180px] h-9 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                      value={assignment.voice_id || "default"}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (v === "default") {
-                          setCharacterVoice(char.name, null, "Default");
-                        } else {
-                          const voice = voices.find((vv) => vv.name === v);
-                          setCharacterVoice(
-                            char.name,
-                            v,
-                            voice?.displayName || v
-                          );
-                        }
-                      }}
-                    >
-                      <option value="default">Default Voice</option>
+
+                    {/* Horizontal scroll of voice chips */}
+                    <div className="flex items-stretch gap-2 overflow-x-auto pb-2 scrollbar-thin">
+                      {/* Default voice chip */}
+                      <VoiceChip
+                        selected={assignment.voice_id === null}
+                        onSelect={() => setCharacterVoice(char.name, null, "Default")}
+                        displayName="Default"
+                        tagline="No cloning"
+                        avatarInitials="DF"
+                        voiceId={null}
+                        previewUrl={null}
+                      />
                       {voices.map((v) => (
-                        <option key={v.id} value={v.name}>
-                          {v.displayName || v.name}
-                          {v.country ? ` — ${v.country}` : ""}
-                          {v.gender ? ` (${v.gender})` : ""}
-                        </option>
+                        <VoiceChip
+                          key={v.id}
+                          selected={assignment.voice_id === v.name}
+                          onSelect={() =>
+                            setCharacterVoice(
+                              char.name,
+                              v.name,
+                              v.displayName || v.name
+                            )
+                          }
+                          displayName={v.displayName || v.name}
+                          tagline={v.tagline || v.gender || ""}
+                          avatarInitials={v.avatarInitials || v.name.slice(0, 2).toUpperCase()}
+                          voiceId={v.name}
+                          previewUrl={v.previewUrl || `/api/voice-preview/${v.name}`}
+                        />
                       ))}
-                    </select>
+                    </div>
                   </div>
                 );
               })}
             </div>
           )}
 
+          {/* Volume leveling toggle */}
+          <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 p-3">
+            <div className="flex items-start gap-3">
+              <Volume2 className="h-4 w-4 text-muted-foreground mt-0.5" />
+              <div>
+                <Label className="text-sm font-medium">
+                  Level volumes across characters
+                </Label>
+                <p className="text-[11px] text-muted-foreground max-w-sm">
+                  Normalizes each character's segment to a common loudness (RMS)
+                  so no one voice is dramatically louder than the rest.
+                </p>
+              </div>
+            </div>
+            {/* Inline toggle — shadcn-style without a Switch component */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={levelVolumes}
+              onClick={() => setLevelVolumes(!levelVolumes)}
+              className={`relative h-5 w-9 rounded-full transition-colors ${
+                levelVolumes ? "bg-primary" : "bg-muted"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                  levelVolumes ? "translate-x-4" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </div>
+
           <div className="flex items-center justify-between gap-3 pt-2 border-t border-border">
             <div className="text-xs text-muted-foreground">
               {segments?.length || 0} segments total
             </div>
             <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                onClick={clearCharacters}
-                disabled={submitting}
-              >
+              <Button variant="outline" onClick={clearCharacters} disabled={submitting}>
                 <X className="h-4 w-4 mr-1.5" />
                 Cancel
               </Button>
@@ -210,5 +267,62 @@ export function CharacterAssignment() {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+interface VoiceChipProps {
+  selected: boolean;
+  onSelect: () => void;
+  displayName: string;
+  tagline: string;
+  avatarInitials: string;
+  voiceId: string | null;
+  previewUrl: string | null;
+}
+
+function VoiceChip({
+  selected,
+  onSelect,
+  displayName,
+  tagline,
+  avatarInitials,
+  voiceId,
+  previewUrl,
+}: VoiceChipProps) {
+  return (
+    <motion.button
+      type="button"
+      onClick={onSelect}
+      whileHover={{ y: -2 }}
+      transition={{ type: "spring", stiffness: 400, damping: 22 }}
+      className={`relative flex-shrink-0 w-40 rounded-lg border p-2.5 text-left transition-colors ${
+        selected
+          ? "border-primary/60 bg-primary/5 ring-1 ring-primary/30"
+          : "border-border bg-card hover:border-border/80 hover:bg-accent/40"
+      }`}
+    >
+      <div className="flex items-center gap-2 mb-2">
+        <VoiceAvatar
+          id={voiceId || "default"}
+          initials={avatarInitials}
+          size="sm"
+          animated={false}
+        />
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] font-medium truncate">{displayName}</p>
+          {tagline && (
+            <p className="text-[9px] text-muted-foreground truncate">{tagline}</p>
+          )}
+        </div>
+        {selected && (
+          <Check className="h-3.5 w-3.5 text-primary flex-shrink-0" />
+        )}
+      </div>
+      {previewUrl && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <VoicePreviewPlayer src={previewUrl} compact iconOnly />
+        </div>
+      )}
+    </motion.button>
   );
 }

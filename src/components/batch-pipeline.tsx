@@ -330,9 +330,12 @@ function MergeNode({ batch }: { batch: BatchView }) {
       toast.error("Merged audio file not found");
       return;
     }
+    // Prefer the story title captured when the batch was queued
+    const title = batch.jobs[0]?.batch_title?.trim();
+    const fileName = title ? `${title}.wav` : `fish-speech-multi-${batch.id.slice(0, 8)}.wav`;
     const a = document.createElement("a");
     a.href = url;
-    a.download = `fish-speech-multi-${batch.id.slice(0, 8)}.wav`;
+    a.download = fileName;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };

@@ -3,6 +3,34 @@ import { useQueueStore } from "./queue-store";
 import { toast } from "sonner";
 import type { EnrichedVoice } from "@/components/voice-card";
 
+/**
+ * Derive a short slug from the source text or character list. Used as the
+ * default download name for merged multi-voice output so users don't get
+ * `fish-speech-multi-abc123.wav` but something like
+ * `little-red-riding-hood.wav` based on the first line.
+ */
+function deriveStoryTitle(
+  text: string,
+  characters: ScriptCharacter[] | null
+): string {
+  // Prefer the first meaningful line of the script
+  const firstLine = text.split(/\n|\./).map((s) => s.trim()).find((s) => s.length > 6);
+  if (firstLine) {
+    const words = firstLine.split(/\s+/).slice(0, 7).join(" ");
+    const slug = words.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    if (slug.length > 0) return slug.slice(0, 50);
+  }
+  // Fallback: join character names
+  if (characters && characters.length > 0) {
+    return characters
+      .map((c) => c.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"))
+      .filter(Boolean)
+      .join("-")
+      .slice(0, 50);
+  }
+  return "multi-voice";
+}
+
 export interface ScriptCharacter {
   name: string;
   description: string;
@@ -48,6 +76,11 @@ interface TTSSettingsStore {
   segments: ScriptSegment[] | null;
   /** Character name -> assigned voice */
   characterAssignments: Record<string, CharacterVoiceAssignment>;
+  /** When true, the final merged audio has each character's volume normalized
+   * to a common RMS level. ON by default to avoid the "one voice louder than
+   * the rest" problem across multi-voice generations. */
+  levelCharacterVolumes: boolean;
+  setLevelCharacterVolumes: (v: boolean) => void;
 
   generate: () => Promise<void>;
   generateExpressions: () => Promise<void>;
@@ -87,6 +120,8 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
   characters: null,
   segments: null,
   characterAssignments: {},
+  levelCharacterVolumes: true,
+  setLevelCharacterVolumes: (v) => set({ levelCharacterVolumes: v }),
 
   generateExpressions: async () => {
     const state = get();
@@ -185,6 +220,10 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
     const batch_id = crypto.randomUUID();
     const total = state.segments.length;
 
+    // Derive a batch title from the first several words of the source text so
+    // the merged download gets a human-readable name (e.g., "little-red-riding-hood").
+    const batch_title = deriveStoryTitle(state.text, state.characters);
+
     for (let i = 0; i < state.segments.length; i++) {
       const seg = state.segments[i];
       const assignment = state.characterAssignments[seg.character] || {
@@ -206,6 +245,8 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
         batch_order: i,
         batch_size: total,
         character: seg.character,
+        batch_title,
+        batch_normalize: state.levelCharacterVolumes,
       });
     }
 
