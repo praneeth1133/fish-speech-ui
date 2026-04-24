@@ -330,14 +330,15 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
         voiceName = voice.displayName || voice.name;
       }
 
-      // Vercel serverless functions have an upper bound on response latency
-      // (60–300 s depending on plan/Fluid config). Fish Speech generation on
-      // a consumer GPU is roughly real-time, so ~300 chars of text already
-      // sits at the edge of that limit. If the user pastes a paragraph, we
-      // silently split by sentence and queue each piece as a batch — the
-      // existing queue-provider then concatenates them into one WAV. Short
-      // prompts go through as a single job exactly like before.
-      const MAX_SINGLE_REQUEST_CHARS = 220;
+      // Target ~1 minute of audio per single-voice request. Fish Speech
+      // runs at roughly real-time on a consumer GPU, and Vercel Hobby with
+      // Fluid Compute gives us up to 300 s per serverless invocation, so
+      // keeping each chunk to roughly a minute of speech (~900 chars for
+      // typical English prose, measured empirically on Fish Speech S2-Pro)
+      // sits comfortably inside that budget without fragmenting short
+      // messages. Anything under this stays a single request — no stitching,
+      // no merged history entry, no "Split into N" toast.
+      const MAX_SINGLE_REQUEST_CHARS = 900;
       const chunks =
         fullText.length > MAX_SINGLE_REQUEST_CHARS
           ? chunkTextBySentence(fullText, MAX_SINGLE_REQUEST_CHARS)
