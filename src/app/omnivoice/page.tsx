@@ -21,9 +21,13 @@ import {
   Copy,
   Mic,
   Brush,
+  Library,
+  Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { makeDownloadName } from "@/lib/download-name";
+import { VoiceAvatar } from "@/components/voice-avatar";
+import { VoicePreviewPlayer } from "@/components/voice-preview-player";
 
 // Curated set of common languages; the model supports 600+ so "Auto" is fine
 // when the user doesn't want to pick. Users can type any BCP-47 name in the
@@ -61,11 +65,25 @@ const LANGUAGES = [
   "Greek",
 ];
 
+interface PresetVoice {
+  id: string;
+  name: string;
+  displayName?: string;
+  tagline?: string;
+  gender?: string;
+  avatarInitials?: string;
+  previewUrl?: string;
+  is_backend_ref?: boolean;
+  mtime?: number;
+  language?: string;
+  country?: string;
+}
+
 export default function OmniVoicePage() {
   const [text, setText] = useState(
     "Hello from OmniVoice — a text-to-speech model that speaks over 600 languages."
   );
-  const [mode, setMode] = useState<"clone" | "design">("clone");
+  const [mode, setMode] = useState<"preset" | "clone" | "design">("preset");
   const [language, setLanguage] = useState("Auto");
   const [instruct, setInstruct] = useState(
     "A warm, natural female voice speaking at a conversational pace."
@@ -73,6 +91,9 @@ export default function OmniVoicePage() {
   const [refAudio, setRefAudio] = useState<File | null>(null);
   const [refAudioUrl, setRefAudioUrl] = useState<string | null>(null);
   const [refText, setRefText] = useState("");
+  const [presetVoices, setPresetVoices] = useState<PresetVoice[]>([]);
+  const [selectedPreset, setSelectedPreset] = useState<PresetVoice | null>(null);
+  const [presetSearch, setPresetSearch] = useState("");
   const [numStep, setNumStep] = useState(32);
   const [guidanceScale, setGuidanceScale] = useState(2.0);
   const [speed, setSpeed] = useState(1.0);
@@ -92,6 +113,44 @@ export default function OmniVoicePage() {
     };
   }, [resultUrl, refAudioUrl]);
 
+  // Load the Fish Speech reference library as OmniVoice voice presets.
+  // Each reference has a static sample.wav already — OmniVoice treats that
+  // as its clone reference, so we get 150+ presets for free.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/voices")
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        const list: PresetVoice[] = (data.voices || [])
+          .filter((v: PresetVoice) => v.is_backend_ref)
+          .sort(
+            (a: PresetVoice, b: PresetVoice) =>
+              (b.mtime || 0) - (a.mtime || 0)
+          );
+        setPresetVoices(list);
+        // Default to the first voice so the page is immediately usable
+        if (!selectedPreset && list.length > 0) setSelectedPreset(list[0]);
+      })
+      .catch(() => setPresetVoices([]));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const filteredPresets = presetVoices.filter((v) => {
+    const q = presetSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (v.displayName || v.name).toLowerCase().includes(q) ||
+      (v.tagline || "").toLowerCase().includes(q) ||
+      (v.gender || "").toLowerCase().includes(q) ||
+      (v.language || "").toLowerCase().includes(q) ||
+      (v.country || "").toLowerCase().includes(q)
+    );
+  });
+
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -109,14 +168,26 @@ export default function OmniVoicePage() {
       toast.error("Voice Clone mode needs a reference audio file");
       return;
     }
+    if (mode === "preset" && !selectedPreset) {
+      toast.error("Pick a preset voice first");
+      return;
+    }
     setIsGenerating(true);
     setResultUrl(null);
     try {
       // Convert reference audio to base64 so we can send JSON (simpler than
       // multipart + easier to proxy to the Gradio API on the server).
       let refAudioB64: string | undefined;
+      let refAudioUrlRemote: string | undefined;
       if (mode === "clone" && refAudio) {
         refAudioB64 = await fileToDataUrl(refAudio);
+      } else if (mode === "preset" && selectedPreset) {
+        // The preset's sample is served as a static WAV by the backend at
+        // /api/voice-preview/<id>. Give OmniVoice a fully-qualified URL it
+        // can fetch — the proxy will accept either a URL or a base64 blob.
+        refAudioUrlRemote = selectedPreset.previewUrl?.startsWith("http")
+          ? selectedPreset.previewUrl
+          : `${window.location.origin}${selectedPreset.previewUrl || `/api/voice-preview/${selectedPreset.name}`}`;
       }
 
       const res = await fetch("/api/omnivoice/tts", {
@@ -125,8 +196,10 @@ export default function OmniVoicePage() {
         body: JSON.stringify({
           text,
           language,
-          mode,
+          // OmniVoice itself only knows clone vs design, so preset maps to clone.
+          mode: mode === "design" ? "design" : "clone",
           ref_audio_b64: refAudioB64,
+          ref_audio_url: refAudioUrlRemote,
           ref_text: refText,
           instruct: mode === "design" ? instruct : "",
           num_step: numStep,
@@ -239,10 +312,17 @@ export default function OmniVoicePage() {
               </p>
             </div>
 
-            {/* Mode picker — clone vs design */}
+            {/* Mode picker — preset / clone / design */}
             <div className="space-y-2">
               <Label className="text-sm font-medium">Voice mode</Label>
               <div className="flex gap-2">
+                <ModeButton
+                  active={mode === "preset"}
+                  onClick={() => setMode("preset")}
+                  icon={<Library className="h-3.5 w-3.5" />}
+                  label="Preset"
+                  hint="Pick a saved voice"
+                />
                 <ModeButton
                   active={mode === "clone"}
                   onClick={() => setMode("clone")}
@@ -262,7 +342,89 @@ export default function OmniVoicePage() {
           </div>
 
           {/* Mode-specific inputs */}
-          {mode === "clone" ? (
+          {mode === "preset" ? (
+            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <Label className="text-sm font-medium flex items-center gap-2">
+                  <Library className="h-4 w-4" />
+                  Voice preset
+                </Label>
+                <div className="flex-1 min-w-[180px] max-w-sm">
+                  <Input
+                    value={presetSearch}
+                    onChange={(e) => setPresetSearch(e.target.value)}
+                    placeholder={`Search ${presetVoices.length} voices...`}
+                    className="h-8 text-xs"
+                  />
+                </div>
+              </div>
+
+              {selectedPreset && (
+                <div className="flex items-center gap-3 rounded-md border border-primary/30 bg-primary/5 p-3">
+                  <VoiceAvatar
+                    id={selectedPreset.name}
+                    initials={selectedPreset.avatarInitials || selectedPreset.name.slice(0, 2).toUpperCase()}
+                    size="md"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {selectedPreset.displayName || selectedPreset.name}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground truncate">
+                      {selectedPreset.tagline || selectedPreset.name}
+                    </p>
+                  </div>
+                  {selectedPreset.previewUrl && (
+                    <VoicePreviewPlayer src={selectedPreset.previewUrl} compact iconOnly />
+                  )}
+                </div>
+              )}
+
+              {/* Grid of presets — 3–4 per row */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[280px] overflow-y-auto pr-1">
+                {filteredPresets.slice(0, 80).map((v) => {
+                  const isSel = selectedPreset?.name === v.name;
+                  return (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => setSelectedPreset(v)}
+                      className={`flex items-center gap-2 rounded-md border p-2 text-left transition-colors ${
+                        isSel
+                          ? "border-primary/60 bg-primary/5 ring-1 ring-primary/30"
+                          : "border-border bg-card hover:border-border/80 hover:bg-accent/40"
+                      }`}
+                    >
+                      <VoiceAvatar
+                        id={v.name}
+                        initials={v.avatarInitials || v.name.slice(0, 2).toUpperCase()}
+                        size="sm"
+                        animated={false}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] font-medium truncate">
+                          {v.displayName || v.name}
+                        </p>
+                        <p className="text-[9px] text-muted-foreground truncate">
+                          {v.tagline || v.gender || ""}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+                {filteredPresets.length === 0 && (
+                  <p className="col-span-full text-xs text-muted-foreground text-center py-6">
+                    No voices match your search
+                  </p>
+                )}
+              </div>
+              {filteredPresets.length > 80 && (
+                <p className="text-[10px] text-muted-foreground">
+                  Showing 80 of {filteredPresets.length} — narrow your search to see more
+                </p>
+              )}
+            </div>
+          ) : mode === "clone" ? (
             <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
               <Label className="text-sm font-medium">Reference audio</Label>
               <div className="flex items-center gap-3">

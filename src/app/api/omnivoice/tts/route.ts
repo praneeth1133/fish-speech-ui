@@ -48,9 +48,15 @@ export async function POST(request: NextRequest) {
     return jsonError(400, "Invalid JSON body");
   }
 
-  const text = ((body.text as string) || "").trim();
-  if (!text) return jsonError(400, "'text' is required");
-  if (text.length > 5000) return jsonError(400, "text too long (max 5000 chars)");
+  const rawText = ((body.text as string) || "").trim();
+  if (!rawText) return jsonError(400, "'text' is required");
+  if (rawText.length > 5000) return jsonError(400, "text too long (max 5000 chars)");
+
+  // Strip expression tags so OmniVoice doesn't speak them literally. Emotion
+  // tags get merged into the instruct prompt so the model tries to voice them.
+  // Pause tags are converted to punctuation (commas / periods / em-dashes)
+  // which the model naturally reads as short / medium / long pauses.
+  const { cleanText, emotionHint } = parseExpressions(rawText);
 
   const language = (body.language as string) || "Auto";
   const mode = (body.mode as string) || "clone"; // "clone" or "design"
@@ -80,14 +86,20 @@ export async function POST(request: NextRequest) {
     };
   }
 
+  // Merge emotion hints into the instruct prompt when in design mode — the
+  // model can pick them up as tone direction.
+  const instructFinal = emotionHint
+    ? (instruct ? `${instruct}. ${emotionHint}` : emotionHint)
+    : instruct;
+
   // Build the payload matching OmniVoice's _gen_core signature.
   // Exact order matters for Gradio — see app.py in the Space.
   const payload = {
     data: [
-      text,                       // text
+      cleanText,                  // text (expression tags stripped)
       language,                   // language
       refAudioArg,                // ref_audio (FileData | null)
-      instruct,                   // instruct (voice design prompt)
+      instructFinal,              // instruct (voice design prompt + emotion)
       numStep,                    // num_step
       guidanceScale,              // guidance_scale
       denoise,                    // denoise
@@ -230,4 +242,61 @@ function clampFloat(v: unknown, min: number, max: number, def: number): number {
   const n = typeof v === "number" ? v : NaN;
   if (!isFinite(n)) return def;
   return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * Parse Fish-Speech-style expression tags from user text.
+ * - Pause tags become punctuation so the model naturally pauses.
+ * - Emotion tags become an instruct-prompt suffix ("Voice it excitedly").
+ * Returns { cleanText, emotionHint } — the text with all tags stripped and
+ * a natural-language hint consumers can merge into their voice-direction.
+ */
+function parseExpressions(text: string): { cleanText: string; emotionHint: string } {
+  const emotions: string[] = [];
+
+  // Pause tags → punctuation
+  let s = text
+    .replace(/\[\s*LONG\s+PAUSE\s*\]/gi, " — ")
+    .replace(/\[\s*MEDIUM\s+PAUSE\s*\]/gi, ". ")
+    .replace(/\[\s*SHORT\s+PAUSE\s*\]/gi, ", ");
+
+  // Emotion tags → strip + collect
+  const EMOTIONS: Record<string, string> = {
+    EXCITED: "excited and energetic",
+    CALM: "calm and measured",
+    SAD: "sad and soft",
+    ANGRY: "angry and forceful",
+    ANGER: "angry and forceful",
+    WHISPERING: "whispering quietly",
+    WHISPER: "whispering quietly",
+    SUSPENSE: "tense and suspenseful",
+    SUSPENSEFUL: "tense and suspenseful",
+    POSITIVE: "warm and positive",
+    HAPPY: "happy and cheerful",
+    CHEERFUL: "happy and cheerful",
+    FEARFUL: "fearful and hesitant",
+    SARCASTIC: "sarcastic and dry",
+    SHOUT: "shouting",
+    SHOUTING: "shouting",
+  };
+
+  s = s.replace(/\[([^\]]+)\]/g, (_, raw: string) => {
+    const key = raw.trim().toUpperCase().replace(/\s+/g, "");
+    const mapped = EMOTIONS[key] || EMOTIONS[raw.trim().toUpperCase()];
+    if (mapped) {
+      emotions.push(mapped);
+      return " ";
+    }
+    // Unknown tag — strip it rather than let it be spoken literally
+    return " ";
+  });
+
+  // Collapse whitespace
+  const cleanText = s.replace(/\s+/g, " ").replace(/\s+([.,!?—])/g, "$1").trim();
+
+  const emotionHint = emotions.length
+    ? `Voice it ${Array.from(new Set(emotions)).join(", then ")}.`
+    : "";
+
+  return { cleanText, emotionHint };
 }
