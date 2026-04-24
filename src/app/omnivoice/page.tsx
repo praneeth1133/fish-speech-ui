@@ -983,7 +983,7 @@ function CharacterPanel({
   onIdentify: () => void;
   onClear: () => void;
   onAssign: (charName: string, preset: OmniVoicePreset) => void;
-  multiProgress: { done: number; total: number } | null;
+  multiProgress: { done: number; total: number; phase: "generating" | "merging" } | null;
   multiErrors: string[];
 }) {
   return (
