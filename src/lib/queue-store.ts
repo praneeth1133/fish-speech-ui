@@ -327,7 +327,17 @@ export const useQueueStore = create<QueueState>()(
               if (errBody?.error) errorMessage = errBody.error;
             } catch {
               const text = await res.text().catch(() => "");
-              if (text) errorMessage = text;
+              // Don't dump raw HTML error pages into the queue UI — they
+              // usually mean the proxy layer (ngrok, Vercel) intercepted the
+              // request, not our app. Show a cleaner message instead.
+              if (text) {
+                const looksHtml = /^\s*<!DOCTYPE|^\s*<html/i.test(text);
+                errorMessage = looksHtml
+                  ? `Backend returned an HTML error page (HTTP ${res.status}). The tunnel or proxy likely timed out or rejected the request.`
+                  : text.length > 200
+                    ? text.slice(0, 200).trim() + "…"
+                    : text;
+              }
             }
             throw new Error(errorMessage);
           }

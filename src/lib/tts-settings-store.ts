@@ -314,7 +314,8 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
 
   generate: async () => {
     const state = get();
-    if (!state.text.trim()) return;
+    const fullText = state.text.trim();
+    if (!fullText) return;
 
     set({ isGenerating: true });
     try {
@@ -329,22 +330,64 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
         voiceName = voice.displayName || voice.name;
       }
 
-      useQueueStore.getState().addJob({
-        text: state.text.trim(),
-        format: state.format,
-        engine: state.engine,
-        voice_id: voiceId,
-        voice_name: voiceName,
-        temperature: state.temperature,
-        top_p: state.topP,
-        repetition_penalty: state.repetitionPenalty,
-        max_new_tokens: state.maxTokens,
-        chunk_length: state.chunkLength,
-      });
+      // Vercel serverless functions have an upper bound on response latency
+      // (60–300 s depending on plan/Fluid config). Fish Speech generation on
+      // a consumer GPU is roughly real-time, so ~300 chars of text already
+      // sits at the edge of that limit. If the user pastes a paragraph, we
+      // silently split by sentence and queue each piece as a batch — the
+      // existing queue-provider then concatenates them into one WAV. Short
+      // prompts go through as a single job exactly like before.
+      const MAX_SINGLE_REQUEST_CHARS = 220;
+      const chunks =
+        fullText.length > MAX_SINGLE_REQUEST_CHARS
+          ? chunkTextBySentence(fullText, MAX_SINGLE_REQUEST_CHARS)
+          : [fullText];
 
-      toast.success("Added to queue", {
-        description: `"${state.text.trim().slice(0, 50)}${state.text.trim().length > 50 ? "..." : ""}" with ${voiceName}`,
-      });
+      if (chunks.length === 1) {
+        useQueueStore.getState().addJob({
+          text: chunks[0],
+          format: state.format,
+          engine: state.engine,
+          voice_id: voiceId,
+          voice_name: voiceName,
+          temperature: state.temperature,
+          top_p: state.topP,
+          repetition_penalty: state.repetitionPenalty,
+          max_new_tokens: state.maxTokens,
+          chunk_length: state.chunkLength,
+        });
+        toast.success("Added to queue", {
+          description: `"${chunks[0].slice(0, 50)}${chunks[0].length > 50 ? "..." : ""}" with ${voiceName}`,
+        });
+      } else {
+        // Long text: queue each chunk as part of a single batch that the
+        // queue-provider will auto-merge into one history entry.
+        const batch_id = crypto.randomUUID();
+        const batch_title = deriveStoryTitle(fullText, null);
+        chunks.forEach((chunk, i) => {
+          useQueueStore.getState().addJob({
+            text: chunk,
+            format: state.format,
+            engine: state.engine,
+            voice_id: voiceId,
+            voice_name: voiceName,
+            temperature: state.temperature,
+            top_p: state.topP,
+            repetition_penalty: state.repetitionPenalty,
+            max_new_tokens: state.maxTokens,
+            chunk_length: state.chunkLength,
+            batch_id,
+            batch_order: i,
+            batch_size: chunks.length,
+            batch_title,
+            batch_normalize: false, // same voice for every chunk — no leveling needed
+          });
+        });
+        toast.success(`Split into ${chunks.length} chunks`, {
+          description:
+            "Long text is generated chunk-by-chunk, then auto-combined into one audio file.",
+        });
+      }
       set({ text: "" });
     } catch (e) {
       toast.error("Failed to queue", {
@@ -355,3 +398,65 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
     }
   },
 }));
+
+/**
+ * Split a chunk of text into pieces, each no larger than `maxChars`, at
+ * sentence boundaries when possible. Keeps bracketed expression tags
+ * ([EXCITED], [PAUSE]) attached to the sentence they precede so the
+ * model never loses context for a tag at a chunk boundary.
+ */
+function chunkTextBySentence(text: string, maxChars: number): string[] {
+  // Split on sentence enders while keeping the terminator attached
+  const parts = text
+    .split(/([.!?])\s+/)
+    .reduce<string[]>((acc, token, i) => {
+      // Re-merge sentence + its terminator produced by the capture group
+      if (i % 2 === 0) {
+        acc.push(token);
+      } else {
+        const last = acc.pop() || "";
+        acc.push((last + token).trim());
+      }
+      return acc;
+    }, [])
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const chunks: string[] = [];
+  let current = "";
+  for (const sentence of parts) {
+    if (!current) {
+      current = sentence;
+      continue;
+    }
+    if ((current + " " + sentence).length <= maxChars) {
+      current = current + " " + sentence;
+    } else {
+      chunks.push(current);
+      current = sentence;
+    }
+  }
+  if (current) chunks.push(current);
+
+  // Emergency split: any single sentence still over the limit gets sliced
+  // on whitespace so we never produce a chunk larger than maxChars.
+  const safe: string[] = [];
+  for (const c of chunks) {
+    if (c.length <= maxChars) {
+      safe.push(c);
+      continue;
+    }
+    const words = c.split(/\s+/);
+    let buf = "";
+    for (const w of words) {
+      if ((buf + " " + w).trim().length > maxChars && buf) {
+        safe.push(buf.trim());
+        buf = w;
+      } else {
+        buf = buf ? `${buf} ${w}` : w;
+      }
+    }
+    if (buf) safe.push(buf.trim());
+  }
+  return safe;
+}
