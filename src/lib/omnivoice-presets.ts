@@ -41,6 +41,21 @@ export interface OmniVoicePreset {
     | "Portuguese Accent / 葡萄牙口音"
     | "Auto";
   dialect?: string; // Chinese dialect (rarely used for English)
+  /**
+   * When set, this preset represents a Fish Speech reference voice bridged
+   * into OmniVoice. The API route will fetch the reference WAV from the
+   * local backend and feed it into OmniVoice's _clone_fn endpoint.
+   * When unset, the preset uses OmniVoice's attribute-driven _design_fn
+   * instead.
+   */
+  fishSpeechVoiceId?: string;
+  /** Where this preset came from — drives UI badges and sample playback path. */
+  source?: "omnivoice" | "fish-speech";
+  /** Optional metadata shown alongside Fish Speech voices. */
+  language?: string;
+  country?: string;
+  /** Direct preview URL, used instead of regenerating a sample via OmniVoice. */
+  previewUrl?: string;
 }
 
 export const OMNIVOICE_PRESETS: OmniVoicePreset[] = [

@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { backendFetch } from "../../_lib/backend";
 
 export const maxDuration = 300;
 
@@ -92,10 +93,44 @@ export async function POST(request: NextRequest) {
   const { cleanText, emotionHint } = parseExpressions(rawText);
 
   const language = (body.language as string) || "Auto";
-  const mode = (body.mode as string) || "clone"; // "clone" or "design"
-  const refAudioB64 = body.ref_audio_b64 as string | undefined;
+  let mode = (body.mode as string) || "clone"; // "clone" or "design"
+  let refAudioB64 = body.ref_audio_b64 as string | undefined;
   const refAudioUrl = body.ref_audio_url as string | undefined;
   const refText = (body.ref_text as string) || "";
+  const fishSpeechVoiceId = body.fish_speech_voice_id as string | undefined;
+
+  // When a Fish Speech voice id is supplied, pull its reference WAV directly
+  // from the local backend and feed it into OmniVoice's _clone_fn. This is
+  // how we make every Fish Speech reference voice available inside OmniVoice
+  // without the user having to upload audio manually.
+  if (fishSpeechVoiceId && !refAudioB64 && !refAudioUrl) {
+    if (!/^[a-zA-Z0-9\-_]+$/.test(fishSpeechVoiceId)) {
+      return jsonError(400, "Invalid fish_speech_voice_id");
+    }
+    try {
+      const sampleResp = await backendFetch(
+        `/v1/references/${encodeURIComponent(fishSpeechVoiceId)}/sample`,
+        { method: "GET", timeoutMs: 15_000 }
+      );
+      if (!sampleResp.ok) {
+        return jsonError(
+          sampleResp.status === 404 ? 404 : 502,
+          sampleResp.status === 404
+            ? `Fish Speech voice "${fishSpeechVoiceId}" has no reference audio on the backend`
+            : `Failed to fetch Fish Speech reference audio (${sampleResp.status})`
+        );
+      }
+      const wavBuf = await sampleResp.arrayBuffer();
+      const contentType = sampleResp.headers.get("Content-Type") || "audio/wav";
+      refAudioB64 = `data:${contentType};base64,${Buffer.from(wavBuf).toString("base64")}`;
+      mode = "clone"; // Force clone mode whenever a Fish Speech voice is attached
+    } catch (err) {
+      return jsonError(
+        502,
+        `Couldn't reach Fish Speech backend to load reference: ${String(err)}`
+      );
+    }
+  }
   const instruct = (body.instruct as string) || "";
   const numStep = clampInt(body.num_step, 4, 64, 32);
   const guidanceScale = clampFloat(body.guidance_scale, 0.5, 5.0, 2.0);

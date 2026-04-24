@@ -54,6 +54,26 @@ export function OmniVoiceSampleButton({ preset, size = "sm" }: Props) {
   const generate = async (): Promise<Blob | null> => {
     setState("loading");
     try {
+      // Fish Speech bridged voices — play the pre-baked reference audio
+      // directly from the local backend. This is orders of magnitude faster
+      // (~100ms vs ~2s) and costs nothing on the OmniVoice T4, since it's
+      // just streaming an existing WAV instead of running a TTS inference.
+      if (preset.fishSpeechVoiceId) {
+        const previewSrc =
+          preset.previewUrl ||
+          `/api/voice-preview/${encodeURIComponent(preset.fishSpeechVoiceId)}`;
+        const res = await fetch(previewSrc);
+        if (!res.ok) throw new Error(`Preview ${res.status}`);
+        const blob = await res.blob();
+        await setCachedSample(preset.id, blob);
+        const objUrl = URL.createObjectURL(blob);
+        urlCache.set(preset.id, objUrl);
+        setUrl(objUrl);
+        setState("ready");
+        return blob;
+      }
+
+      // OmniVoice attribute presets — synthesize via the design endpoint.
       const res = await fetch("/api/omnivoice/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

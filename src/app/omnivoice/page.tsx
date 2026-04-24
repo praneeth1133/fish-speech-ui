@@ -84,6 +84,53 @@ interface ScriptSegment {
 }
 type CharacterAssignments = Record<string, OmniVoicePreset | null>;
 
+// Shape returned by /api/voices — only the fields we consume here.
+interface BackendVoice {
+  id: string;
+  name: string;
+  displayName?: string;
+  language?: string;
+  gender?: string;
+  country?: string;
+  tagline?: string;
+  avatarInitials?: string;
+  previewUrl?: string;
+  is_backend_ref?: boolean;
+  mtime?: number;
+}
+
+/**
+ * Wrap a Fish Speech reference voice in the OmniVoicePreset shape so the
+ * rest of the page doesn't need to branch on voice source. The resulting
+ * preset carries fishSpeechVoiceId, which the API route uses to route the
+ * generation through OmniVoice's _clone_fn with the Fish Speech reference
+ * WAV attached.
+ */
+function backendVoiceToPreset(v: BackendVoice): OmniVoicePreset {
+  const genderKey = (v.gender || "").toLowerCase();
+  const inferredGender =
+    genderKey.startsWith("m")
+      ? "Male / 男"
+      : genderKey.startsWith("f")
+        ? "Female / 女"
+        : undefined;
+  const countryBits = [v.country, v.language].filter(Boolean).join(" · ");
+  return {
+    id: `fs:${v.name}`,
+    name: v.displayName || v.name,
+    tagline: v.tagline || countryBits || "Fish Speech voice",
+    initials:
+      v.avatarInitials ||
+      (v.displayName || v.name).slice(0, 2).toUpperCase(),
+    gender: inferredGender,
+    fishSpeechVoiceId: v.name,
+    source: "fish-speech",
+    language: v.language,
+    country: v.country,
+    previewUrl: v.previewUrl || `/api/voice-preview/${encodeURIComponent(v.name)}`,
+  };
+}
+
 export default function OmniVoicePage() {
   const [text, setText] = useState(
     "Hello from OmniVoice — a text-to-speech model that speaks over 600 languages."
@@ -125,6 +172,46 @@ export default function OmniVoicePage() {
   // Expression-generation state (AI-annotates text with [EXCITED] etc.)
   const [annotating, setAnnotating] = useState(false);
 
+  // Fish Speech voices fetched from the local backend and bridged into
+  // OmniVoice's clone endpoint. Loaded once on mount.
+  const [fishSpeechPresets, setFishSpeechPresets] = useState<OmniVoicePreset[]>([]);
+  const [fishSpeechLoading, setFishSpeechLoading] = useState(true);
+  // Toggle between attribute presets, Fish Speech bridge, or both.
+  const [voiceSource, setVoiceSource] = useState<"all" | "omnivoice" | "fish-speech">("all");
+
+  useEffect(() => {
+    let cancelled = false;
+    setFishSpeechLoading(true);
+    fetch("/api/voices")
+      .then((r) => r.json())
+      .then((data: { voices?: BackendVoice[] }) => {
+        if (cancelled) return;
+        const bridged: OmniVoicePreset[] = (data.voices || [])
+          .filter((v) => v.is_backend_ref && v.name)
+          .map(backendVoiceToPreset);
+        setFishSpeechPresets(bridged);
+      })
+      .catch((err) => {
+        console.warn("Couldn't load Fish Speech voices:", err);
+        if (!cancelled) setFishSpeechPresets([]);
+      })
+      .finally(() => {
+        if (!cancelled) setFishSpeechLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Unified preset list exposed through the picker, with OmniVoice attribute
+  // presets first (they're hand-tuned) and Fish Speech bridge voices after,
+  // newest-first (by mtime on disk) so freshly added refs are easy to find.
+  const allPresets = useMemo(() => {
+    if (voiceSource === "omnivoice") return OMNIVOICE_PRESETS;
+    if (voiceSource === "fish-speech") return fishSpeechPresets;
+    return [...OMNIVOICE_PRESETS, ...fishSpeechPresets];
+  }, [fishSpeechPresets, voiceSource]);
+
   // Revoke object URLs on unmount / replace
   useEffect(() => {
     return () => {
@@ -135,16 +222,19 @@ export default function OmniVoicePage() {
 
   const filteredPresets = useMemo(() => {
     const q = presetSearch.trim().toLowerCase();
-    if (!q) return OMNIVOICE_PRESETS;
-    return OMNIVOICE_PRESETS.filter(
+    if (!q) return allPresets;
+    return allPresets.filter(
       (v) =>
         v.name.toLowerCase().includes(q) ||
         v.tagline.toLowerCase().includes(q) ||
         (v.gender || "").toLowerCase().includes(q) ||
         (v.age || "").toLowerCase().includes(q) ||
-        (v.accent || "").toLowerCase().includes(q)
+        (v.accent || "").toLowerCase().includes(q) ||
+        (v.language || "").toLowerCase().includes(q) ||
+        (v.country || "").toLowerCase().includes(q) ||
+        (v.fishSpeechVoiceId || "").toLowerCase().includes(q)
     );
-  }, [presetSearch]);
+  }, [presetSearch, allPresets]);
 
   const segmentCountByCharacter = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -281,13 +371,21 @@ export default function OmniVoicePage() {
       let refAudioB64: string | undefined;
       let apiMode: "clone" | "design" = "design";
       let presetAttrs: Partial<OmniVoicePreset> = {};
+      let fishSpeechVoiceId: string | undefined;
 
       if (mode === "clone" && refAudio) {
         refAudioB64 = await fileToDataUrl(refAudio);
         apiMode = "clone";
       } else if (mode === "preset" && selectedPreset) {
-        apiMode = "design";
-        presetAttrs = presetToAttrs(selectedPreset);
+        if (selectedPreset.fishSpeechVoiceId) {
+          // Fish Speech bridge — the API route will fetch the ref WAV
+          // from the local backend and feed it into OmniVoice's _clone_fn.
+          apiMode = "clone";
+          fishSpeechVoiceId = selectedPreset.fishSpeechVoiceId;
+        } else {
+          apiMode = "design";
+          presetAttrs = presetToAttrs(selectedPreset);
+        }
       }
 
       const res = await fetch("/api/omnivoice/tts", {
@@ -300,6 +398,7 @@ export default function OmniVoicePage() {
           ref_audio_b64: refAudioB64,
           ref_text: refText,
           instruct: mode === "design" ? instruct : "",
+          fish_speech_voice_id: fishSpeechVoiceId,
           ...presetAttrs,
           num_step: numStep,
           guidance_scale: guidanceScale,
@@ -364,21 +463,31 @@ export default function OmniVoicePage() {
           continue;
         }
         try {
+          // Route Fish Speech bridged presets through clone + voice id; the
+          // rest through design + attribute dropdowns. This is what makes
+          // multi-voice scripts able to mix OmniVoice presets with Fish
+          // Speech library voices in the same output.
+          const perSegmentBody: Record<string, unknown> = {
+            text: seg.text,
+            language,
+            num_step: numStep,
+            guidance_scale: guidanceScale,
+            speed,
+            denoise,
+            preprocess_prompt: true,
+            postprocess_output: true,
+          };
+          if (preset.fishSpeechVoiceId) {
+            perSegmentBody.mode = "clone";
+            perSegmentBody.fish_speech_voice_id = preset.fishSpeechVoiceId;
+          } else {
+            perSegmentBody.mode = "design";
+            Object.assign(perSegmentBody, presetToAttrs(preset));
+          }
           const res = await fetch("/api/omnivoice/tts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text: seg.text,
-              language,
-              mode: "design",
-              ...presetToAttrs(preset),
-              num_step: numStep,
-              guidance_scale: guidanceScale,
-              speed,
-              denoise,
-              preprocess_prompt: true,
-              postprocess_output: true,
-            }),
+            body: JSON.stringify(perSegmentBody),
           });
           if (!res.ok) {
             const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -634,6 +743,12 @@ export default function OmniVoicePage() {
               onSelect={setSelectedPreset}
               search={presetSearch}
               onSearch={setPresetSearch}
+              source={voiceSource}
+              onSourceChange={setVoiceSource}
+              fishSpeechLoading={fishSpeechLoading}
+              fishSpeechCount={fishSpeechPresets.length}
+              omnivoiceCount={OMNIVOICE_PRESETS.length}
+              totalCount={allPresets.length}
             />
           ) : mode === "clone" ? (
             <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
@@ -713,6 +828,7 @@ export default function OmniVoicePage() {
               }
               multiProgress={multiProgress}
               multiErrors={multiErrors}
+              availablePresets={allPresets}
             />
           )}
 
@@ -897,40 +1013,88 @@ function PresetPicker({
   onSelect,
   search,
   onSearch,
+  source,
+  onSourceChange,
+  fishSpeechLoading,
+  fishSpeechCount,
+  omnivoiceCount,
+  totalCount,
 }: {
   presets: OmniVoicePreset[];
   selected: OmniVoicePreset | null;
   onSelect: (p: OmniVoicePreset) => void;
   search: string;
   onSearch: (s: string) => void;
+  source: "all" | "omnivoice" | "fish-speech";
+  onSourceChange: (s: "all" | "omnivoice" | "fish-speech") => void;
+  fishSpeechLoading: boolean;
+  fishSpeechCount: number;
+  omnivoiceCount: number;
+  totalCount: number;
 }) {
+  const tabs: { id: typeof source; label: string; count: number }[] = [
+    { id: "all", label: "All", count: totalCount },
+    { id: "omnivoice", label: "OmniVoice", count: omnivoiceCount },
+    { id: "fish-speech", label: "Fish Speech", count: fishSpeechCount },
+  ];
+
   return (
     <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <Label className="text-sm font-medium flex items-center gap-2">
           <Library className="h-4 w-4" />
-          OmniVoice voice preset
+          Voice preset
         </Label>
         <div className="flex-1 min-w-[180px] max-w-sm">
           <Input
             value={search}
             onChange={(e) => onSearch(e.target.value)}
-            placeholder={`Search ${OMNIVOICE_PRESETS.length} presets...`}
+            placeholder={`Search ${totalCount} voices...`}
             className="h-8 text-xs"
           />
         </div>
+      </div>
+
+      {/* Source filter tabs */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onSourceChange(t.id)}
+            className={`h-6 px-2 rounded-md text-[11px] font-medium border transition-colors ${
+              source === t.id
+                ? "border-primary/60 bg-primary/10 text-primary"
+                : "border-border bg-card text-muted-foreground hover:bg-accent/40"
+            }`}
+          >
+            {t.label}
+            <span className="ml-1 opacity-70">· {t.count}</span>
+          </button>
+        ))}
+        {fishSpeechLoading && (
+          <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            loading Fish Speech voices…
+          </span>
+        )}
       </div>
 
       {selected && (
         <div className="flex items-center gap-3 rounded-md border border-primary/30 bg-primary/5 p-3">
           <VoiceAvatar id={selected.id} initials={selected.initials} size="md" />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate">{selected.name}</p>
+            <div className="flex items-center gap-1.5">
+              <p className="text-sm font-medium truncate">{selected.name}</p>
+              <SourceBadge preset={selected} />
+            </div>
             <p className="text-[11px] text-muted-foreground truncate">
               {selected.tagline}
             </p>
             <p className="text-[10px] text-muted-foreground/70 truncate mt-0.5">
-              {attrSummary(selected)}
+              {selected.fishSpeechVoiceId
+                ? `Bridged via OmniVoice clone · ref: ${selected.fishSpeechVoiceId}`
+                : attrSummary(selected)}
             </p>
           </div>
           <OmniVoiceSampleButton preset={selected} />
@@ -965,6 +1129,7 @@ function PresetPicker({
                   {v.tagline}
                 </p>
               </div>
+              <SourceBadge preset={v} compact />
               <OmniVoiceSampleButton preset={v} size="xs" />
             </div>
           );
@@ -976,12 +1141,33 @@ function PresetPicker({
         )}
       </div>
       <p className="text-[10px] text-muted-foreground">
-        Presets set OmniVoice&apos;s Gender / Age / Pitch / Accent / Style
-        attributes via the{" "}
+        OmniVoice presets use the{" "}
         <code className="text-[10px] mx-0.5 px-1 rounded bg-muted">_design_fn</code>
-        endpoint.
+        endpoint; Fish Speech voices bridge through{" "}
+        <code className="text-[10px] mx-0.5 px-1 rounded bg-muted">_clone_fn</code>
+        with the local reference WAV.
       </p>
     </div>
+  );
+}
+
+function SourceBadge({ preset, compact = false }: { preset: OmniVoicePreset; compact?: boolean }) {
+  const isFish = !!preset.fishSpeechVoiceId;
+  return (
+    <span
+      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide ${
+        isFish
+          ? "bg-blue-500/10 text-blue-600 dark:text-blue-300 border border-blue-500/20"
+          : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300 border border-emerald-500/20"
+      } ${compact ? "" : "ml-1"}`}
+      title={
+        isFish
+          ? "Fish Speech reference voice routed through OmniVoice clone"
+          : "OmniVoice attribute preset"
+      }
+    >
+      {isFish ? "FS" : "OV"}
+    </span>
   );
 }
 
@@ -997,6 +1183,7 @@ function CharacterPanel({
   onAssign,
   multiProgress,
   multiErrors,
+  availablePresets,
 }: {
   text: string;
   characters: ScriptCharacter[] | null;
@@ -1009,6 +1196,7 @@ function CharacterPanel({
   onAssign: (charName: string, preset: OmniVoicePreset) => void;
   multiProgress: { done: number; total: number; phase: "generating" | "merging" } | null;
   multiErrors: string[];
+  availablePresets: OmniVoicePreset[];
 }) {
   return (
     <div className="space-y-4 rounded-lg border border-border bg-card/40 p-4">
@@ -1087,6 +1275,7 @@ function CharacterPanel({
                   lineCount={lineCount}
                   assigned={assigned}
                   onAssign={(p) => onAssign(c.name, p)}
+                  availablePresets={availablePresets}
                 />
               );
             })}
@@ -1114,13 +1303,29 @@ function CharacterRow({
   lineCount,
   assigned,
   onAssign,
+  availablePresets,
 }: {
   character: ScriptCharacter;
   lineCount: number;
   assigned: OmniVoicePreset | null | undefined;
   onAssign: (preset: OmniVoicePreset) => void;
+  availablePresets: OmniVoicePreset[];
 }) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return availablePresets;
+    return availablePresets.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.tagline.toLowerCase().includes(q) ||
+        (p.fishSpeechVoiceId || "").toLowerCase().includes(q) ||
+        (p.language || "").toLowerCase().includes(q) ||
+        (p.country || "").toLowerCase().includes(q)
+    );
+  }, [availablePresets, search]);
+
   return (
     <div className="rounded-lg border border-border bg-card/60 p-3 space-y-2">
       <div className="flex items-center gap-3">
@@ -1141,6 +1346,7 @@ function CharacterRow({
                 {assigned.name}
               </Badge>
             )}
+            {assigned && <SourceBadge preset={assigned} compact />}
           </div>
           {character.description && (
             <p className="text-[11px] text-muted-foreground truncate mt-0.5">
@@ -1160,8 +1366,15 @@ function CharacterRow({
       </div>
 
       {open && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[220px] overflow-y-auto pr-1 pt-1 border-t border-border/60">
-          {OMNIVOICE_PRESETS.map((p) => {
+        <div className="pt-1 border-t border-border/60 space-y-2">
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={`Search ${availablePresets.length} voices...`}
+            className="h-7 text-xs"
+          />
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[220px] overflow-y-auto pr-1">
+            {filtered.map((p) => {
             const isSel = assigned?.id === p.id;
             return (
               <div
@@ -1192,11 +1405,18 @@ function CharacterRow({
                     {p.tagline}
                   </p>
                 </div>
+                <SourceBadge preset={p} compact />
                 <OmniVoiceSampleButton preset={p} size="xs" />
                 {isSel && <Check className="h-3 w-3 text-primary shrink-0" />}
               </div>
             );
           })}
+            {filtered.length === 0 && (
+              <p className="col-span-full text-[11px] text-muted-foreground text-center py-4">
+                No voices match &ldquo;{search}&rdquo;
+              </p>
+            )}
+          </div>
         </div>
       )}
     </div>
