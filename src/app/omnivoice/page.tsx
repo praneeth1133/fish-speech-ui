@@ -222,7 +222,7 @@ export default function OmniVoicePage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-2">
               <Label className="text-sm font-medium">Language</Label>
-              <Select value={language} onValueChange={setLanguage}>
+              <Select value={language} onValueChange={(v) => setLanguage(v || "Auto")}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select or type a language" />
                 </SelectTrigger>
@@ -531,7 +531,7 @@ function SliderRow({
         max={max}
         step={step}
         value={[value]}
-        onValueChange={(v) => onChange(v[0])}
+        onValueChange={(v) => onChange(Array.isArray(v) ? v[0] : v)}
       />
       {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
     </div>
