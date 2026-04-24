@@ -201,18 +201,34 @@ export const useQueueStore = create<QueueState>()(
       },
 
       resetStaleProcessing: () => {
+        // On mount: reconcile the persisted queue state with reality.
+        // - Jobs stuck in "processing" from a closed tab → reset to "pending"
+        //   so they resume, IF they're still recent (< 30 min).
+        // - Very old pending/processing jobs are PURGED from the queue
+        //   entirely. They'd otherwise try to re-hit the backend with stale
+        //   settings and produce a "fetch failed" toast the user can't stop.
+        const STALE_MS = 30 * 60 * 1000; // 30 minutes
+        const now = Date.now();
         set((s) => {
-          const hadStale = s.jobs.some((j) => j.status === "processing");
-          if (!hadStale) return s;
-          return {
-            ...s,
-            jobs: s.jobs.map((j) =>
-              j.status === "processing"
-                ? { ...j, status: "pending", started_at: null }
-                : j
-            ),
-            version: s.version + 1,
-          };
+          let changed = false;
+          const jobs: QueueJob[] = [];
+          for (const j of s.jobs) {
+            const createdMs = Date.parse(j.created_at);
+            const isOld = isFinite(createdMs) && now - createdMs > STALE_MS;
+            if (isOld && (j.status === "pending" || j.status === "processing")) {
+              // Drop stale in-flight jobs so they don't auto-resume
+              changed = true;
+              continue;
+            }
+            if (j.status === "processing") {
+              changed = true;
+              jobs.push({ ...j, status: "pending", started_at: null });
+            } else {
+              jobs.push(j);
+            }
+          }
+          if (!changed) return s;
+          return { ...s, jobs, version: s.version + 1 };
         });
       },
 

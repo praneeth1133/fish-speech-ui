@@ -486,6 +486,21 @@ export default function OmniVoicePage() {
     }
   };
 
+  const handleClearResult = () => {
+    // Stop any in-flight playback so the audio element releases the blob URL
+    const a = audioRef.current;
+    if (a) {
+      a.pause();
+      a.currentTime = 0;
+    }
+    if (resultUrl) URL.revokeObjectURL(resultUrl);
+    setResultUrl(null);
+    setResultText("");
+    setResultFilename("omnivoice.wav");
+    setIsPlaying(false);
+    setMultiErrors([]);
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -812,6 +827,15 @@ export default function OmniVoicePage() {
                     onClick={handleDownload}
                   >
                     <Download className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                    title="Clear result"
+                    onClick={handleClearResult}
+                  >
+                    <X className="h-4 w-4" />
                   </Button>
                 </div>
               </div>

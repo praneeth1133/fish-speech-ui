@@ -115,8 +115,21 @@ export function QueueProvider() {
       batches.set(job.batch_id, list);
     }
 
+    // Grab the persisted results once — batches already concatenated in a
+    // previous session should NOT re-fire the "Multi-voice audio ready" toast
+    // on page refresh. This was the bug the user saw: every reload of
+    // /omnivoice (or /) surfaced a stale notification they couldn't dismiss.
+    const batchResults = useQueueStore.getState().batchResults;
+
     for (const [batchId, batchJobs] of batches) {
       if (concatenatedBatchesRef.current.has(batchId)) continue;
+
+      // Previously-completed in another session — register it as seen so we
+      // never fire the toast or try to re-concat, but don't do anything else.
+      if (batchResults[batchId]) {
+        concatenatedBatchesRef.current.add(batchId);
+        continue;
+      }
 
       const size = batchJobs[0]?.batch_size || batchJobs.length;
       const allDone =
