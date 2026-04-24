@@ -33,6 +33,8 @@ import { makeDownloadName } from "@/lib/download-name";
 import { VoiceAvatar } from "@/components/voice-avatar";
 import { OMNIVOICE_PRESETS, type OmniVoicePreset } from "@/lib/omnivoice-presets";
 import { concatAudioBlobs } from "@/lib/wav-concat";
+import { OmniVoiceCostMeter, recordGeneration } from "@/components/omnivoice-cost-meter";
+import { OmniVoiceSampleButton } from "@/components/omnivoice-sample-button";
 
 // Curated set of common languages; the model supports 600+ so "Auto" is fine
 // when the user doesn't want to pick. Users can type any BCP-47 name in the
@@ -116,6 +118,9 @@ export default function OmniVoicePage() {
   const [identifying, setIdentifying] = useState(false);
   const [multiProgress, setMultiProgress] = useState<{ done: number; total: number } | null>(null);
   const [multiErrors, setMultiErrors] = useState<string[]>([]);
+
+  // Expression-generation state (AI-annotates text with [EXCITED] etc.)
+  const [annotating, setAnnotating] = useState(false);
 
   // Revoke object URLs on unmount / replace
   useEffect(() => {
@@ -214,6 +219,44 @@ export default function OmniVoicePage() {
   };
 
   // -------------------------------------------------------------------------
+  // Expression generation — calls the same /api/generate-expressions route
+  // the main Fish Speech page uses. OmniVoice strips unknown tags silently
+  // and converts known emotion tags into an instruct-prompt hint, so the
+  // standard fish-speech tag set is a safe superset for OmniVoice too.
+  // -------------------------------------------------------------------------
+  const handleAddExpressions = async () => {
+    if (!text.trim()) {
+      toast.error("Please enter some text first");
+      return;
+    }
+    setAnnotating(true);
+    try {
+      const res = await fetch("/api/generate-expressions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, engine: "fish-speech" }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const { annotatedText } = (await res.json()) as { annotatedText: string };
+      if (!annotatedText?.trim()) throw new Error("AI returned empty result");
+      setText(annotatedText);
+      toast.success("Expressions added", {
+        description: "Review the tags, then generate audio.",
+      });
+    } catch (err) {
+      console.error(err);
+      toast.error(
+        err instanceof Error ? err.message : "Failed to add expressions"
+      );
+    } finally {
+      setAnnotating(false);
+    }
+  };
+
+  // -------------------------------------------------------------------------
   // Single-voice generation (Preset / Clone / Design modes)
   // -------------------------------------------------------------------------
   const generate = async () => {
@@ -274,6 +317,7 @@ export default function OmniVoicePage() {
       setResultUrl(url);
       setResultText(text);
       setResultFilename(makeDownloadName(text, "wav"));
+      recordGeneration();
       toast.success("Audio generated");
     } catch (err) {
       console.error(err);
@@ -339,6 +383,7 @@ export default function OmniVoicePage() {
           }
           const blob = await res.blob();
           blobs.push(blob);
+          recordGeneration();
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           errors.push(`Segment ${i + 1} (${seg.character}): ${msg}`);
@@ -407,8 +452,8 @@ export default function OmniVoicePage() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-border gap-2 flex-wrap">
-        <div>
+      <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-border gap-3 flex-wrap">
+        <div className="min-w-0">
           <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
             <Globe2 className="h-4 w-4" />
             OmniVoice
@@ -418,22 +463,42 @@ export default function OmniVoicePage() {
             k2-fsa/OmniVoice HF Space (or your own endpoint).
           </p>
         </div>
-        <Badge variant="outline" className="text-[10px]">
-          External API · Pay-as-you-go
-        </Badge>
+        <div className="flex items-center gap-2 flex-wrap">
+          <OmniVoiceCostMeter />
+          <Badge variant="outline" className="text-[10px]">
+            External API · Pay-as-you-go
+          </Badge>
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto p-4 sm:p-6">
         <div className="max-w-3xl mx-auto space-y-5">
-          {/* Text area */}
+          {/* Text area + AI expression annotate */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <Label className="text-sm font-medium">
                 {mode === "characters" ? "Script" : "Text"}
               </Label>
-              <span className="text-[11px] text-muted-foreground">
-                {text.length} chars
-              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAddExpressions}
+                  disabled={annotating || !text.trim()}
+                  className="h-7 gap-1.5 text-xs"
+                  title="Use Claude to sprinkle expression / pause / emotion tags into your text"
+                >
+                  {annotating ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Wand2 className="h-3 w-3" />
+                  )}
+                  Add Expressions
+                </Button>
+                <span className="text-[11px] text-muted-foreground tabular-nums">
+                  {text.length} chars
+                </span>
+              </div>
             </div>
             <Textarea
               value={text}
@@ -447,7 +512,7 @@ export default function OmniVoicePage() {
               placeholder={
                 mode === "characters"
                   ? 'Paste a dialogue or script. Example:\n\nAlice: Did you hear that?\nBob: Yeah. We should probably leave.\nNarrator: The wind picked up.'
-                  : "Type anything in any of 600+ languages..."
+                  : "Type anything in any of 600+ languages. Use [EXCITED], [CALM], [LONG PAUSE] etc. for expression."
               }
               className="min-h-[120px] resize-y"
             />
@@ -804,6 +869,7 @@ function PresetPicker({
               {attrSummary(selected)}
             </p>
           </div>
+          <OmniVoiceSampleButton preset={selected} />
         </div>
       )}
 
@@ -811,15 +877,22 @@ function PresetPicker({
         {presets.map((v) => {
           const isSel = selected?.id === v.id;
           return (
-            <button
+            <div
               key={v.id}
-              type="button"
-              onClick={() => onSelect(v)}
-              className={`flex items-center gap-2 rounded-md border p-2 text-left transition-colors ${
+              className={`relative flex items-center gap-2 rounded-md border p-2 text-left transition-colors cursor-pointer ${
                 isSel
                   ? "border-primary/60 bg-primary/5 ring-1 ring-primary/30"
                   : "border-border bg-card hover:border-border/80 hover:bg-accent/40"
               }`}
+              onClick={() => onSelect(v)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect(v);
+                }
+              }}
             >
               <VoiceAvatar id={v.id} initials={v.initials} size="sm" animated={false} />
               <div className="flex-1 min-w-0">
@@ -828,7 +901,8 @@ function PresetPicker({
                   {v.tagline}
                 </p>
               </div>
-            </button>
+              <OmniVoiceSampleButton preset={v} size="xs" />
+            </div>
           );
         })}
         {presets.length === 0 && (
@@ -1008,6 +1082,7 @@ function CharacterRow({
             </p>
           )}
         </div>
+        {assigned && <OmniVoiceSampleButton preset={assigned} />}
         <Button
           variant="outline"
           size="sm"
@@ -1023,18 +1098,26 @@ function CharacterRow({
           {OMNIVOICE_PRESETS.map((p) => {
             const isSel = assigned?.id === p.id;
             return (
-              <button
+              <div
                 key={p.id}
-                type="button"
-                onClick={() => {
-                  onAssign(p);
-                  setOpen(false);
-                }}
-                className={`flex items-center gap-2 rounded-md border p-2 text-left transition-colors ${
+                className={`relative flex items-center gap-2 rounded-md border p-2 text-left transition-colors cursor-pointer ${
                   isSel
                     ? "border-primary/60 bg-primary/5 ring-1 ring-primary/30"
                     : "border-border bg-card hover:border-border/80 hover:bg-accent/40"
                 }`}
+                onClick={() => {
+                  onAssign(p);
+                  setOpen(false);
+                }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onAssign(p);
+                    setOpen(false);
+                  }
+                }}
               >
                 <VoiceAvatar id={p.id} initials={p.initials} size="sm" animated={false} />
                 <div className="flex-1 min-w-0">
@@ -1043,8 +1126,9 @@ function CharacterRow({
                     {p.tagline}
                   </p>
                 </div>
+                <OmniVoiceSampleButton preset={p} size="xs" />
                 {isSel && <Check className="h-3 w-3 text-primary shrink-0" />}
-              </button>
+              </div>
             );
           })}
         </div>
