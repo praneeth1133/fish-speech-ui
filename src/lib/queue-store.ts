@@ -294,9 +294,11 @@ export const useQueueStore = create<QueueState>()(
 
           // Per-job timeout — if the backend tunnel is hung we'd rather see a
           // clear "TTS generation timed out" in the queue row than a request
-          // that blocks forever.
+          // that blocks forever. Matches the /api/tts route's own Vercel
+          // maxDuration (300 s via Fluid Compute) + a small buffer so we
+          // never abort earlier than the server would.
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 180_000);
+          const timer = setTimeout(() => controller.abort(), 310_000);
           let res: Response;
           try {
             res = await fetch(endpoint, {
@@ -309,7 +311,7 @@ export const useQueueStore = create<QueueState>()(
             clearTimeout(timer);
             if ((fetchErr as Error)?.name === "AbortError") {
               throw new Error(
-                "TTS generation timed out after 3 minutes — the backend is likely offline. Check /api/health and restart your local Fish Speech server if needed."
+                "TTS generation timed out after 5 minutes — the backend is likely offline or overloaded. Check /api/health and restart your local Fish Speech server if needed."
               );
             }
             throw new Error(

@@ -330,29 +330,29 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
         voiceName = voice.displayName || voice.name;
       }
 
-      // Only split when a single voice would clearly exceed Vercel's
-      // serverless budget. Fish Speech runs at roughly real-time on a
-      // consumer GPU, and Vercel Hobby with Fluid Compute allows up to
-      // 300 s per invocation. Two things matter here:
+      // Decide whether to split by looking at the SPEECH length, not the
+      // raw length. Expression tags like [neutral] / [dramatic pause] bloat
+      // character count but get stripped before synthesis, so a 1000-char
+      // tagged story is often only ~700 chars of real speech (~1 minute of
+      // audio). Basing the decision on tag-stripped length lets us keep
+      // typical 1-minute stories as a single job even when they're heavy on
+      // markup.
       //
-      //   1. Expression tags like [neutral] / [excited] / [dramatic pause]
-      //      inflate raw character count significantly but Fish Speech
-      //      strips them before synthesis — so a 1000-char tagged story
-      //      often becomes ~600-700 chars of actual speech (~45 s of audio).
-      //   2. The Fish Speech backend chunks input internally by chunk_length
-      //      (default 200), so we don't need to chunk ourselves for
-      //      quality — only to keep each HTTP round-trip short enough to
-      //      complete inside the Vercel function window.
+      // Threshold ~800 chars of stripped speech = roughly 1 minute of audio
+      // at Fish Speech's default speaking rate (~140 wpm). Generating one
+      // minute of audio on a consumer GPU takes ~2-3 min of backend time,
+      // which fits inside Vercel Fluid Compute's 300 s cap with margin.
       //
-      // 1500 chars is our practical ceiling: ~90 s of generation at
-      // real-time, safe margin under the 300 s cap, and it keeps typical
-      // short stories, dialogues, and single-minute monologues as one
-      // seamless job.
-      const MAX_SINGLE_REQUEST_CHARS = 1500;
-      const chunks =
-        fullText.length > MAX_SINGLE_REQUEST_CHARS
-          ? chunkTextBySentence(fullText, MAX_SINGLE_REQUEST_CHARS)
-          : [fullText];
+      // For splitting we still work on the raw (tagged) text so each chunk
+      // keeps its own tags intact — we just target ~1 minute per chunk.
+      const MAX_SINGLE_REQUEST_CHARS = 1500; // hard ceiling on raw text
+      const SPEECH_CHAR_BUDGET = 800;         // ~1 min of audio
+      const speechLen = stripTagsForLengthEstimate(fullText).length;
+      const shouldSplit =
+        speechLen > SPEECH_CHAR_BUDGET || fullText.length > MAX_SINGLE_REQUEST_CHARS;
+      const chunks = shouldSplit
+        ? chunkTextBySentence(fullText, Math.min(MAX_SINGLE_REQUEST_CHARS, Math.max(SPEECH_CHAR_BUDGET * 1.4, 900)))
+        : [fullText];
 
       if (chunks.length === 1) {
         useQueueStore.getState().addJob({
@@ -409,6 +409,22 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
     }
   },
 }));
+
+/**
+ * Strip bracketed expression tags (`[EXCITED]`, `[dramatic pause]`, etc.)
+ * and collapse whitespace so we can estimate how much real speech the
+ * text contains. Fish Speech removes these tags before synthesis, so the
+ * stripped length is a better proxy for audio duration than raw length.
+ *
+ * NOT used for what we send to the backend — that still gets the tagged
+ * original. This is purely for "should we split?" decisions.
+ */
+function stripTagsForLengthEstimate(text: string): string {
+  return text
+    .replace(/\[[^\]]+\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 /**
  * Split a chunk of text into pieces, each no larger than `maxChars`, at
