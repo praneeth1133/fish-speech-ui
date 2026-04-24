@@ -1,10 +1,11 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { User, UserRound } from "lucide-react";
+import { User, UserRound, Heart } from "lucide-react";
 import { VoicePreviewPlayer } from "./voice-preview-player";
 import { VoiceAvatar } from "./voice-avatar";
 import { COUNTRIES } from "@/lib/voice-names";
+import { useFavoritesStore } from "@/lib/favorites-store";
 import type { EnrichedVoice } from "./voice-card";
 
 interface VoiceRowProps {
@@ -24,10 +25,12 @@ export function VoiceRow({ voice, isSelected, onSelect, index = 0, compact = fal
   const country = voice.countryCode
     ? COUNTRIES.find((c) => c.code === voice.countryCode)
     : null;
+  const isFavorite = useFavoritesStore((s) => s.isFavorite(voice.name));
+  const toggleFavorite = useFavoritesStore((s) => s.toggle);
 
   const gridCols = compact
-    ? "grid-cols-[1fr_auto]"
-    : "grid-cols-[minmax(220px,2fr)_minmax(140px,1fr)_minmax(90px,0.7fr)_auto_auto]";
+    ? "grid-cols-[1fr_auto_auto]"
+    : "grid-cols-[minmax(220px,2fr)_minmax(140px,1fr)_minmax(90px,0.7fr)_auto_auto_auto]";
 
   return (
     <motion.div
@@ -101,7 +104,24 @@ export function VoiceRow({ voice, isSelected, onSelect, index = 0, compact = fal
         )}
       </div>
 
-      {!compact && <div className="w-6 flex-shrink-0" />}
+      {/* Favorite toggle (heart) */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          toggleFavorite(voice.name);
+        }}
+        className={`flex-shrink-0 flex h-7 w-7 items-center justify-center rounded-full transition-colors ${
+          isFavorite
+            ? "text-rose-400 hover:text-rose-500"
+            : "text-muted-foreground/40 hover:text-rose-400 opacity-0 group-hover:opacity-100"
+        } ${isFavorite ? "opacity-100" : ""}`}
+        title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+      >
+        <Heart className="h-3.5 w-3.5" fill={isFavorite ? "currentColor" : "none"} />
+      </button>
+
+      {!compact && <div className="w-2 flex-shrink-0" />}
     </motion.div>
   );
 }

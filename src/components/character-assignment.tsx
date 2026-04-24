@@ -28,8 +28,9 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { VoiceAvatar } from "@/components/voice-avatar";
 import { VoicePreviewPlayer } from "@/components/voice-preview-player";
-import { Users, Sparkles, Loader2, X, Check, Volume2 } from "lucide-react";
+import { Users, Sparkles, Loader2, X, Check, Volume2, Heart } from "lucide-react";
 import { motion } from "framer-motion";
+import { useFavoritesStore } from "@/lib/favorites-store";
 
 interface BackendVoice {
   id: string;
@@ -58,6 +59,18 @@ export function CharacterAssignment() {
   const [voices, setVoices] = useState<BackendVoice[]>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const favoriteIds = useFavoritesStore((s) => s.ids);
+
+  // Sort voices with favorites pinned to the front, then by newest-first
+  const sortedVoices = useMemo(() => {
+    const favSet = new Set(favoriteIds);
+    return [...voices].sort((a, b) => {
+      const aFav = favSet.has(a.name) ? 0 : 1;
+      const bFav = favSet.has(b.name) ? 0 : 1;
+      if (aFav !== bFav) return aFav - bFav;
+      return (b.mtime || 0) - (a.mtime || 0);
+    });
+  }, [voices, favoriteIds]);
 
   const open = characters !== null;
 
@@ -189,7 +202,7 @@ export function CharacterAssignment() {
                           voiceId={null}
                           previewUrl={null}
                         />
-                        {voices.map((v) => (
+                        {sortedVoices.map((v) => (
                           <VoiceChip
                             key={v.id}
                             selected={assignment.voice_id === v.name}
@@ -205,6 +218,7 @@ export function CharacterAssignment() {
                             avatarInitials={v.avatarInitials || v.name.slice(0, 2).toUpperCase()}
                             voiceId={v.name}
                             previewUrl={v.previewUrl || `/api/voice-preview/${v.name}`}
+                            isFavorite={favoriteIds.includes(v.name)}
                           />
                         ))}
                       </div>
@@ -282,6 +296,7 @@ interface VoiceChipProps {
   avatarInitials: string;
   voiceId: string | null;
   previewUrl: string | null;
+  isFavorite?: boolean;
 }
 
 function VoiceChip({
@@ -292,6 +307,7 @@ function VoiceChip({
   avatarInitials,
   voiceId,
   previewUrl,
+  isFavorite = false,
 }: VoiceChipProps) {
   return (
     <motion.button
@@ -305,6 +321,12 @@ function VoiceChip({
           : "border-border bg-card hover:border-border/80 hover:bg-accent/40"
       }`}
     >
+      {isFavorite && (
+        <Heart
+          className="absolute top-1.5 right-1.5 h-3 w-3 text-rose-400"
+          fill="currentColor"
+        />
+      )}
       <div className="flex items-center gap-2 mb-2">
         <VoiceAvatar
           id={voiceId || "default"}

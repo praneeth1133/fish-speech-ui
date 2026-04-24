@@ -34,11 +34,13 @@ import {
   Clock,
   Flame,
   Languages,
+  Heart,
 } from "lucide-react";
 import { toast } from "sonner";
 import { LANGUAGES, COUNTRIES, AGE_BUCKETS, VOICE_NAME_MAP } from "@/lib/voice-names";
 import { audioBufferToWav } from "@/lib/wav-encoder";
 import { listHistory } from "@/lib/idb";
+import { useFavoritesStore } from "@/lib/favorites-store";
 
 interface DBVoice {
   id: string;
@@ -352,6 +354,16 @@ export default function VoicesPage() {
       .sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
       .slice(0, 10);
   }, [backendVoices]);
+
+  // "Favorites" = voices marked with the heart icon, persisted per-device.
+  const favoriteIds = useFavoritesStore((s) => s.ids);
+  const favoriteVoices = useMemo(() => {
+    if (!favoriteIds.length) return [];
+    const byName = new Map(backendVoices.map((v) => [v.name, v]));
+    return favoriteIds
+      .map((id) => byName.get(id))
+      .filter((v): v is DBVoice => !!v);
+  }, [backendVoices, favoriteIds]);
 
   // "Most Used" = top 10 voices by generation count (from history in IndexedDB).
   const mostUsedVoices = useMemo(() => {
@@ -708,6 +720,35 @@ export default function VoicesPage() {
 
       <div className="flex-1 overflow-auto p-4 sm:p-6">
         <div className="max-w-6xl mx-auto space-y-8">
+          {/* Favorites (per-device, localStorage) */}
+          {favoriteVoices.length > 0 && (
+            <section>
+              <h3 className="text-sm font-medium text-foreground/50 mb-3 flex items-center gap-2">
+                <Heart className="h-4 w-4 text-rose-400" fill="currentColor" />
+                Favorites
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                  {favoriteVoices.length}
+                </Badge>
+              </h3>
+              <div className="border border-border/50 rounded-lg overflow-hidden bg-card/30">
+                {favoriteVoices.map((voice, i) => (
+                  <VoiceRow
+                    key={`fav-${voice.id}`}
+                    voice={voice as EnrichedVoice}
+                    isSelected={false}
+                    onSelect={() => {
+                      toast.info(`${voice.displayName || voice.name}`, {
+                        description: "Go to Text to Speech to use this voice",
+                        icon: "❤️",
+                      });
+                    }}
+                    index={i}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Most Used section — top voices by generation count from local history */}
           {mostUsedVoices.length > 0 && (
             <section>

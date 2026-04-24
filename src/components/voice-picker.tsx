@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { type EnrichedVoice } from "./voice-card";
 import { VoiceRow } from "./voice-row";
 import { LANGUAGES } from "@/lib/voice-names";
+import { useFavoritesStore } from "@/lib/favorites-store";
+import { Heart } from "lucide-react";
 
 const GENDER_OPTIONS = ["all", "male", "female"] as const;
 
@@ -152,6 +154,13 @@ export function VoicePicker({
         </span>
       </div>
 
+      {/* Favorites strip — per-device localStorage favorites */}
+      <FavoritesStrip
+        voices={voices}
+        selectedVoice={selectedVoice}
+        onSelectVoice={onSelectVoice}
+      />
+
       {/* Voice list (matches the main Voice Library layout) */}
       <div className="border border-border/50 rounded-lg overflow-hidden bg-card/30">
         {showDefaultVoice && (
@@ -233,5 +242,56 @@ function FilterPill({
         {count}
       </span>
     </button>
+  );
+}
+
+/**
+ * Favorites strip — small dedicated section at the top of the picker
+ * showing the user's favorited voices (from localStorage). Hidden when
+ * there are no favorites. Uses the same compact VoiceRow layout so the UX
+ * is consistent with the main list below.
+ */
+function FavoritesStrip({
+  voices,
+  selectedVoice,
+  onSelectVoice,
+}: {
+  voices: EnrichedVoice[];
+  selectedVoice: string;
+  onSelectVoice: (voiceId: string) => void;
+}) {
+  const favoriteIds = useFavoritesStore((s) => s.ids);
+  const favorites = useMemo(() => {
+    if (!favoriteIds.length) return [];
+    const byName = new Map(voices.map((v) => [v.name, v]));
+    return favoriteIds
+      .map((id) => byName.get(id))
+      .filter((v): v is EnrichedVoice => !!v);
+  }, [voices, favoriteIds]);
+
+  if (favorites.length === 0) return null;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground font-medium">
+        <Heart className="h-3 w-3 text-rose-400" fill="currentColor" />
+        Favorites
+        <span className="text-[9px] text-muted-foreground/50">
+          {favorites.length}
+        </span>
+      </div>
+      <div className="border border-border/50 rounded-lg overflow-hidden bg-card/30">
+        {favorites.map((voice, i) => (
+          <VoiceRow
+            key={`pfav-${voice.id}`}
+            voice={voice}
+            isSelected={selectedVoice === voice.id}
+            onSelect={onSelectVoice}
+            index={i}
+            compact
+          />
+        ))}
+      </div>
+    </div>
   );
 }
