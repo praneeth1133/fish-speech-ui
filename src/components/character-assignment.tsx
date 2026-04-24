@@ -113,28 +113,28 @@ export function CharacterAssignment() {
         if (!next) clearCharacters();
       }}
     >
-      <DialogContent className="sm:max-w-3xl max-h-[92vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-3xl w-[min(92vw,48rem)] h-[min(90vh,720px)] p-0 flex flex-col overflow-hidden">
+        {/* Sticky header */}
+        <DialogHeader className="px-5 pt-5 pb-3 border-b border-border shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <Users className="h-4 w-4" />
             Assign Voices to Characters
           </DialogTitle>
+          <p className="text-sm text-muted-foreground mt-1">
+            AI found {characters.length} character
+            {characters.length === 1 ? "" : "s"} in your script. Pick a voice
+            for each — tap play on any chip to hear its sample.
+          </p>
         </DialogHeader>
 
-        <div className="space-y-4 pt-3">
-          <p className="text-sm text-muted-foreground">
-            AI found {characters.length} character
-            {characters.length === 1 ? "" : "s"} in your script. Pick a voice for
-            each — click the play button on any voice chip to hear its sample
-            instantly.
-          </p>
-
+        {/* Scrollable body */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-4">
           {loadingVoices ? (
             <div className="flex items-center justify-center py-10">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <div className="space-y-4 max-h-[55vh] overflow-y-auto pr-2">
+            <div className="space-y-4">
               {characters.map((char) => {
                 const assignment = assignments[char.name] || {
                   voice_id: null,
@@ -176,64 +176,67 @@ export function CharacterAssignment() {
                       </div>
                     </div>
 
-                    {/* Horizontal scroll of voice chips */}
-                    <div className="flex items-stretch gap-2 overflow-x-auto pb-2 scrollbar-thin">
-                      {/* Default voice chip */}
-                      <VoiceChip
-                        selected={assignment.voice_id === null}
-                        onSelect={() => setCharacterVoice(char.name, null, "Default")}
-                        displayName="Default"
-                        tagline="No cloning"
-                        avatarInitials="DF"
-                        voiceId={null}
-                        previewUrl={null}
-                      />
-                      {voices.map((v) => (
+                    {/* Horizontally scrollable voice chip strip — strictly
+                        contained so it never widens its parent dialog. */}
+                    <div className="relative w-full">
+                      <div className="flex items-stretch gap-2 overflow-x-auto pb-2 -mx-1 px-1 snap-x snap-mandatory scrollbar-thin">
                         <VoiceChip
-                          key={v.id}
-                          selected={assignment.voice_id === v.name}
-                          onSelect={() =>
-                            setCharacterVoice(
-                              char.name,
-                              v.name,
-                              v.displayName || v.name
-                            )
-                          }
-                          displayName={v.displayName || v.name}
-                          tagline={v.tagline || v.gender || ""}
-                          avatarInitials={v.avatarInitials || v.name.slice(0, 2).toUpperCase()}
-                          voiceId={v.name}
-                          previewUrl={v.previewUrl || `/api/voice-preview/${v.name}`}
+                          selected={assignment.voice_id === null}
+                          onSelect={() => setCharacterVoice(char.name, null, "Default")}
+                          displayName="Default"
+                          tagline="No cloning"
+                          avatarInitials="DF"
+                          voiceId={null}
+                          previewUrl={null}
                         />
-                      ))}
+                        {voices.map((v) => (
+                          <VoiceChip
+                            key={v.id}
+                            selected={assignment.voice_id === v.name}
+                            onSelect={() =>
+                              setCharacterVoice(
+                                char.name,
+                                v.name,
+                                v.displayName || v.name
+                              )
+                            }
+                            displayName={v.displayName || v.name}
+                            tagline={v.tagline || v.gender || ""}
+                            avatarInitials={v.avatarInitials || v.name.slice(0, 2).toUpperCase()}
+                            voiceId={v.name}
+                            previewUrl={v.previewUrl || `/api/voice-preview/${v.name}`}
+                          />
+                        ))}
+                      </div>
                     </div>
                   </div>
                 );
               })}
             </div>
           )}
+        </div>
 
+        {/* Sticky footer (always visible) — toggle + actions */}
+        <div className="border-t border-border bg-card/95 backdrop-blur px-5 py-3 space-y-3 shrink-0">
           {/* Volume leveling toggle */}
-          <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 p-3">
-            <div className="flex items-start gap-3">
-              <Volume2 className="h-4 w-4 text-muted-foreground mt-0.5" />
-              <div>
-                <Label className="text-sm font-medium">
+          <div className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <Volume2 className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+              <div className="min-w-0">
+                <Label className="text-sm font-medium block">
                   Level volumes across characters
                 </Label>
-                <p className="text-[11px] text-muted-foreground max-w-sm">
-                  Normalizes each character's segment to a common loudness (RMS)
-                  so no one voice is dramatically louder than the rest.
+                <p className="text-[11px] text-muted-foreground">
+                  Normalizes each segment to a common loudness so no one voice is louder.
                 </p>
               </div>
             </div>
-            {/* Inline toggle — shadcn-style without a Switch component */}
             <button
               type="button"
               role="switch"
               aria-checked={levelVolumes}
               onClick={() => setLevelVolumes(!levelVolumes)}
-              className={`relative h-5 w-9 rounded-full transition-colors ${
+              className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
                 levelVolumes ? "bg-primary" : "bg-muted"
               }`}
             >
@@ -245,7 +248,8 @@ export function CharacterAssignment() {
             </button>
           </div>
 
-          <div className="flex items-center justify-between gap-3 pt-2 border-t border-border">
+          {/* Action buttons */}
+          <div className="flex items-center justify-between gap-3">
             <div className="text-xs text-muted-foreground">
               {segments?.length || 0} segments total
             </div>
@@ -295,7 +299,7 @@ function VoiceChip({
       onClick={onSelect}
       whileHover={{ y: -2 }}
       transition={{ type: "spring", stiffness: 400, damping: 22 }}
-      className={`relative flex-shrink-0 w-40 rounded-lg border p-2.5 text-left transition-colors ${
+      className={`relative flex-shrink-0 w-36 snap-start rounded-lg border p-2.5 text-left transition-colors ${
         selected
           ? "border-primary/60 bg-primary/5 ring-1 ring-primary/30"
           : "border-border bg-card hover:border-border/80 hover:bg-accent/40"
