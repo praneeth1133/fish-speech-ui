@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,11 +23,16 @@ import {
   Brush,
   Library,
   Users,
+  Wand2,
+  Check,
+  X,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { makeDownloadName } from "@/lib/download-name";
 import { VoiceAvatar } from "@/components/voice-avatar";
 import { OMNIVOICE_PRESETS, type OmniVoicePreset } from "@/lib/omnivoice-presets";
+import { concatAudioBlobs } from "@/lib/wav-concat";
 
 // Curated set of common languages; the model supports 600+ so "Auto" is fine
 // when the user doesn't want to pick. Users can type any BCP-47 name in the
@@ -65,11 +70,23 @@ const LANGUAGES = [
   "Greek",
 ];
 
+// Character-mode types (local to this page — OmniVoice doesn't use the
+// Fish-Speech tts-settings-store, which is tied to the local GPU backend).
+interface ScriptCharacter {
+  name: string;
+  description: string;
+}
+interface ScriptSegment {
+  character: string;
+  text: string;
+}
+type CharacterAssignments = Record<string, OmniVoicePreset | null>;
+
 export default function OmniVoicePage() {
   const [text, setText] = useState(
     "Hello from OmniVoice — a text-to-speech model that speaks over 600 languages."
   );
-  const [mode, setMode] = useState<"preset" | "clone" | "design">("preset");
+  const [mode, setMode] = useState<"preset" | "clone" | "design" | "characters">("preset");
   const [language, setLanguage] = useState("Auto");
   const [instruct, setInstruct] = useState(
     "A warm, natural female voice speaking at a conversational pace."
@@ -92,6 +109,14 @@ export default function OmniVoicePage() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
 
+  // Character-mode state
+  const [characters, setCharacters] = useState<ScriptCharacter[] | null>(null);
+  const [segments, setSegments] = useState<ScriptSegment[] | null>(null);
+  const [assignments, setAssignments] = useState<CharacterAssignments>({});
+  const [identifying, setIdentifying] = useState(false);
+  const [multiProgress, setMultiProgress] = useState<{ done: number; total: number } | null>(null);
+  const [multiErrors, setMultiErrors] = useState<string[]>([]);
+
   // Revoke object URLs on unmount / replace
   useEffect(() => {
     return () => {
@@ -100,21 +125,30 @@ export default function OmniVoicePage() {
     };
   }, [resultUrl, refAudioUrl]);
 
-  // OmniVoice-native presets: curated combinations of OmniVoice's own
-  // Design attribute dropdowns (gender / age / pitch / style / accent).
-  // Unlike Fish Speech, OmniVoice has no built-in reference audio library,
-  // so "presets" here are attribute bundles — no external audio involved.
-  const filteredPresets = OMNIVOICE_PRESETS.filter((v) => {
+  const filteredPresets = useMemo(() => {
     const q = presetSearch.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      v.name.toLowerCase().includes(q) ||
-      v.tagline.toLowerCase().includes(q) ||
-      (v.gender || "").toLowerCase().includes(q) ||
-      (v.age || "").toLowerCase().includes(q) ||
-      (v.accent || "").toLowerCase().includes(q)
+    if (!q) return OMNIVOICE_PRESETS;
+    return OMNIVOICE_PRESETS.filter(
+      (v) =>
+        v.name.toLowerCase().includes(q) ||
+        v.tagline.toLowerCase().includes(q) ||
+        (v.gender || "").toLowerCase().includes(q) ||
+        (v.age || "").toLowerCase().includes(q) ||
+        (v.accent || "").toLowerCase().includes(q)
     );
-  });
+  }, [presetSearch]);
+
+  const segmentCountByCharacter = useMemo(() => {
+    const counts: Record<string, number> = {};
+    if (!segments) return counts;
+    for (const s of segments) counts[s.character] = (counts[s.character] || 0) + 1;
+    return counts;
+  }, [segments]);
+
+  const allCharactersAssigned = useMemo(() => {
+    if (!characters || characters.length === 0) return false;
+    return characters.every((c) => assignments[c.name]);
+  }, [characters, assignments]);
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -124,6 +158,64 @@ export default function OmniVoicePage() {
     setRefAudioUrl(URL.createObjectURL(f));
   };
 
+  // -------------------------------------------------------------------------
+  // Identify characters — calls the shared /api/identify-characters endpoint
+  // (uses Claude Haiku) then seeds default preset assignments so every
+  // character has something picked from the start.
+  // -------------------------------------------------------------------------
+  const handleIdentifyCharacters = async () => {
+    if (!text.trim()) {
+      toast.error("Please enter a script first");
+      return;
+    }
+    setIdentifying(true);
+    setMultiErrors([]);
+    try {
+      const res = await fetch("/api/identify-characters", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as {
+        characters: ScriptCharacter[];
+        segments: ScriptSegment[];
+      };
+      setCharacters(data.characters);
+      setSegments(data.segments);
+      // Auto-assign presets based on character name heuristics
+      const nextAssignments: CharacterAssignments = {};
+      data.characters.forEach((c, i) => {
+        nextAssignments[c.name] = guessPresetForCharacter(c, i);
+      });
+      setAssignments(nextAssignments);
+      toast.success(
+        `Found ${data.characters.length} character${
+          data.characters.length === 1 ? "" : "s"
+        } across ${data.segments.length} segments`
+      );
+    } catch (err) {
+      console.error(err);
+      toast.error(err instanceof Error ? err.message : "Character detection failed");
+    } finally {
+      setIdentifying(false);
+    }
+  };
+
+  const clearCharacters = () => {
+    setCharacters(null);
+    setSegments(null);
+    setAssignments({});
+    setMultiProgress(null);
+    setMultiErrors([]);
+  };
+
+  // -------------------------------------------------------------------------
+  // Single-voice generation (Preset / Clone / Design modes)
+  // -------------------------------------------------------------------------
   const generate = async () => {
     if (!text.trim()) {
       toast.error("Please enter some text");
@@ -140,8 +232,6 @@ export default function OmniVoicePage() {
     setIsGenerating(true);
     setResultUrl(null);
     try {
-      // Build the request body. Clone uploads a custom audio; Design and
-      // Preset both hit OmniVoice's _design_fn (attribute dropdowns).
       let refAudioB64: string | undefined;
       let apiMode: "clone" | "design" = "design";
       let presetAttrs: Partial<OmniVoicePreset> = {};
@@ -151,14 +241,7 @@ export default function OmniVoicePage() {
         apiMode = "clone";
       } else if (mode === "preset" && selectedPreset) {
         apiMode = "design";
-        presetAttrs = {
-          gender: selectedPreset.gender,
-          age: selectedPreset.age,
-          pitch: selectedPreset.pitch,
-          style: selectedPreset.style,
-          accent: selectedPreset.accent,
-          dialect: selectedPreset.dialect,
-        };
+        presetAttrs = presetToAttrs(selectedPreset);
       }
 
       const res = await fetch("/api/omnivoice/tts", {
@@ -171,13 +254,7 @@ export default function OmniVoicePage() {
           ref_audio_b64: refAudioB64,
           ref_text: refText,
           instruct: mode === "design" ? instruct : "",
-          // Attribute dropdowns for design (and preset)
-          gender: presetAttrs.gender,
-          age: presetAttrs.age,
-          pitch: presetAttrs.pitch,
-          style: presetAttrs.style,
-          accent: presetAttrs.accent,
-          dialect: presetAttrs.dialect,
+          ...presetAttrs,
           num_step: numStep,
           guidance_scale: guidanceScale,
           speed,
@@ -201,6 +278,103 @@ export default function OmniVoicePage() {
     } catch (err) {
       console.error(err);
       toast.error(err instanceof Error ? err.message : "Generation failed");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // Multi-voice (character) generation
+  //   1. For every segment: POST /api/omnivoice/tts with that character's preset
+  //   2. Collect the returned wav blobs
+  //   3. Merge via concatAudioBlobs (RMS-leveled by default)
+  //   4. Expose as the single result player
+  // -------------------------------------------------------------------------
+  const generateMultiVoice = async () => {
+    if (!segments || !characters) {
+      toast.error("Identify characters first");
+      return;
+    }
+    if (!allCharactersAssigned) {
+      toast.error("Pick a voice for every character");
+      return;
+    }
+    setIsGenerating(true);
+    setResultUrl(null);
+    setMultiErrors([]);
+    setMultiProgress({ done: 0, total: segments.length });
+
+    const errors: string[] = [];
+    const blobs: Blob[] = [];
+
+    try {
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i];
+        const preset = assignments[seg.character];
+        if (!preset) {
+          errors.push(`Missing voice for ${seg.character}`);
+          setMultiProgress({ done: i + 1, total: segments.length });
+          continue;
+        }
+        try {
+          const res = await fetch("/api/omnivoice/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text: seg.text,
+              language,
+              mode: "design",
+              ...presetToAttrs(preset),
+              num_step: numStep,
+              guidance_scale: guidanceScale,
+              speed,
+              denoise,
+              preprocess_prompt: true,
+              postprocess_output: true,
+            }),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: res.statusText }));
+            throw new Error(err.error || `HTTP ${res.status}`);
+          }
+          const blob = await res.blob();
+          blobs.push(blob);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          errors.push(`Segment ${i + 1} (${seg.character}): ${msg}`);
+        }
+        setMultiProgress({ done: i + 1, total: segments.length });
+      }
+
+      if (blobs.length === 0) {
+        throw new Error("Every segment failed — no audio to merge");
+      }
+
+      const merged = await concatAudioBlobs(blobs, {
+        gapSeconds: 0.3,
+        normalizeVolume: true,
+        targetRms: 0.1,
+      });
+      const url = URL.createObjectURL(merged);
+      setResultUrl(url);
+      const fullText = segments.map((s) => s.text).join(" ");
+      setResultText(fullText);
+      setResultFilename(makeDownloadName(fullText, "wav"));
+      setMultiErrors(errors);
+      if (errors.length === 0) {
+        toast.success(`Merged ${blobs.length} segments`);
+      } else {
+        toast.warning(
+          `Merged ${blobs.length} segments (${errors.length} failed — see details)`
+        );
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error(err instanceof Error ? err.message : "Multi-voice generation failed");
+      setMultiErrors((prev) => [
+        ...prev,
+        err instanceof Error ? err.message : String(err),
+      ]);
     } finally {
       setIsGenerating(false);
     }
@@ -254,20 +428,32 @@ export default function OmniVoicePage() {
           {/* Text area */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label className="text-sm font-medium">Text</Label>
+              <Label className="text-sm font-medium">
+                {mode === "characters" ? "Script" : "Text"}
+              </Label>
               <span className="text-[11px] text-muted-foreground">
                 {text.length} chars
               </span>
             </div>
             <Textarea
               value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Type anything in any of 600+ languages..."
+              onChange={(e) => {
+                setText(e.target.value);
+                if (mode === "characters" && characters) {
+                  // User edited the script — previous character parse is stale
+                  clearCharacters();
+                }
+              }}
+              placeholder={
+                mode === "characters"
+                  ? 'Paste a dialogue or script. Example:\n\nAlice: Did you hear that?\nBob: Yeah. We should probably leave.\nNarrator: The wind picked up.'
+                  : "Type anything in any of 600+ languages..."
+              }
               className="min-h-[120px] resize-y"
             />
           </div>
 
-          {/* Language picker */}
+          {/* Language picker + mode picker */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-2">
               <Label className="text-sm font-medium">Language</Label>
@@ -284,14 +470,13 @@ export default function OmniVoicePage() {
                 </SelectContent>
               </Select>
               <p className="text-[11px] text-muted-foreground">
-                600+ supported — "Auto" detects from your text
+                600+ supported — &ldquo;Auto&rdquo; detects from your text
               </p>
             </div>
 
-            {/* Mode picker — preset / clone / design */}
             <div className="space-y-2">
               <Label className="text-sm font-medium">Voice mode</Label>
-              <div className="flex gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <ModeButton
                   active={mode === "preset"}
                   onClick={() => setMode("preset")}
@@ -313,99 +498,26 @@ export default function OmniVoicePage() {
                   label="Design"
                   hint="Describe voice"
                 />
+                <ModeButton
+                  active={mode === "characters"}
+                  onClick={() => setMode("characters")}
+                  icon={<Users className="h-3.5 w-3.5" />}
+                  label="Characters"
+                  hint="Multi-voice script"
+                />
               </div>
             </div>
           </div>
 
           {/* Mode-specific inputs */}
           {mode === "preset" ? (
-            <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <Label className="text-sm font-medium flex items-center gap-2">
-                  <Library className="h-4 w-4" />
-                  OmniVoice voice preset
-                </Label>
-                <div className="flex-1 min-w-[180px] max-w-sm">
-                  <Input
-                    value={presetSearch}
-                    onChange={(e) => setPresetSearch(e.target.value)}
-                    placeholder={`Search ${OMNIVOICE_PRESETS.length} presets...`}
-                    className="h-8 text-xs"
-                  />
-                </div>
-              </div>
-
-              {selectedPreset && (
-                <div className="flex items-center gap-3 rounded-md border border-primary/30 bg-primary/5 p-3">
-                  <VoiceAvatar
-                    id={selectedPreset.id}
-                    initials={selectedPreset.initials}
-                    size="md"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">
-                      {selectedPreset.name}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground truncate">
-                      {selectedPreset.tagline}
-                    </p>
-                    <p className="text-[10px] text-muted-foreground/70 truncate mt-0.5">
-                      {[
-                        selectedPreset.gender?.split(" / ")[0],
-                        selectedPreset.age?.split(" / ")[0],
-                        selectedPreset.pitch?.split(" / ")[0],
-                        selectedPreset.accent?.split(" / ")[0],
-                        selectedPreset.style?.split(" / ")[0],
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[320px] overflow-y-auto pr-1">
-                {filteredPresets.map((v) => {
-                  const isSel = selectedPreset?.id === v.id;
-                  return (
-                    <button
-                      key={v.id}
-                      type="button"
-                      onClick={() => setSelectedPreset(v)}
-                      className={`flex items-center gap-2 rounded-md border p-2 text-left transition-colors ${
-                        isSel
-                          ? "border-primary/60 bg-primary/5 ring-1 ring-primary/30"
-                          : "border-border bg-card hover:border-border/80 hover:bg-accent/40"
-                      }`}
-                    >
-                      <VoiceAvatar
-                        id={v.id}
-                        initials={v.initials}
-                        size="sm"
-                        animated={false}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[11px] font-medium truncate">{v.name}</p>
-                        <p className="text-[9px] text-muted-foreground truncate">
-                          {v.tagline}
-                        </p>
-                      </div>
-                    </button>
-                  );
-                })}
-                {filteredPresets.length === 0 && (
-                  <p className="col-span-full text-xs text-muted-foreground text-center py-6">
-                    No presets match your search
-                  </p>
-                )}
-              </div>
-              <p className="text-[10px] text-muted-foreground">
-                Presets set OmniVoice's Gender / Age / Pitch / Accent / Style
-                attributes. No reference audio needed — this uses the
-                <code className="text-[10px] mx-1 px-1 rounded bg-muted">_design_fn</code>
-                endpoint on the HF Space.
-              </p>
-            </div>
+            <PresetPicker
+              presets={filteredPresets}
+              selected={selectedPreset}
+              onSelect={setSelectedPreset}
+              search={presetSearch}
+              onSearch={setPresetSearch}
+            />
           ) : mode === "clone" ? (
             <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
               <Label className="text-sm font-medium">Reference audio</Label>
@@ -456,7 +568,7 @@ export default function OmniVoicePage() {
                 />
               </div>
             </div>
-          ) : (
+          ) : mode === "design" ? (
             <div className="space-y-2 rounded-lg border border-border bg-card/40 p-4">
               <Label className="text-sm font-medium">Voice description</Label>
               <Textarea
@@ -469,6 +581,22 @@ export default function OmniVoicePage() {
                 Describe the voice in natural language — gender, age, pace, tone, accent.
               </p>
             </div>
+          ) : (
+            <CharacterPanel
+              text={text}
+              characters={characters}
+              segments={segments}
+              assignments={assignments}
+              segmentCountByCharacter={segmentCountByCharacter}
+              identifying={identifying}
+              onIdentify={handleIdentifyCharacters}
+              onClear={clearCharacters}
+              onAssign={(charName, preset) =>
+                setAssignments((prev) => ({ ...prev, [charName]: preset }))
+              }
+              multiProgress={multiProgress}
+              multiErrors={multiErrors}
+            />
           )}
 
           {/* Advanced settings */}
@@ -519,23 +647,31 @@ export default function OmniVoicePage() {
             </div>
           </details>
 
-          {/* Generate button */}
+          {/* Generate button — swaps between single-voice & multi-voice */}
           <div className="sticky bottom-4">
             <Button
               size="lg"
               className="w-full gap-2 shadow-lg"
-              onClick={generate}
-              disabled={isGenerating}
+              onClick={mode === "characters" ? generateMultiVoice : generate}
+              disabled={
+                isGenerating ||
+                (mode === "characters" &&
+                  (!characters || !segments || !allCharactersAssigned))
+              }
             >
               {isGenerating ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Generating…
+                  {multiProgress
+                    ? `Generating ${multiProgress.done} / ${multiProgress.total}…`
+                    : "Generating…"}
                 </>
               ) : (
                 <>
                   <Sparkles className="h-4 w-4" />
-                  Generate Audio
+                  {mode === "characters"
+                    ? "Generate Multi-Voice Audio"
+                    : "Generate Audio"}
                 </>
               )}
             </Button>
@@ -595,6 +731,25 @@ export default function OmniVoicePage() {
               <p className="text-xs text-muted-foreground line-clamp-3">
                 {resultText}
               </p>
+              {multiErrors.length > 0 && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-[11px] text-destructive space-y-0.5">
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    {multiErrors.length} segment
+                    {multiErrors.length === 1 ? "" : "s"} failed
+                  </div>
+                  {multiErrors.slice(0, 3).map((e, i) => (
+                    <p key={i} className="pl-5 truncate">
+                      {e}
+                    </p>
+                  ))}
+                  {multiErrors.length > 3 && (
+                    <p className="pl-5 text-muted-foreground">
+                      …and {multiErrors.length - 3} more
+                    </p>
+                  )}
+                </div>
+              )}
             </motion.div>
           )}
         </div>
@@ -603,14 +758,299 @@ export default function OmniVoicePage() {
   );
 }
 
-/** Helper — base64 data URL of a file. */
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result as string);
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function PresetPicker({
+  presets,
+  selected,
+  onSelect,
+  search,
+  onSearch,
+}: {
+  presets: OmniVoicePreset[];
+  selected: OmniVoicePreset | null;
+  onSelect: (p: OmniVoicePreset) => void;
+  search: string;
+  onSearch: (s: string) => void;
+}) {
+  return (
+    <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <Label className="text-sm font-medium flex items-center gap-2">
+          <Library className="h-4 w-4" />
+          OmniVoice voice preset
+        </Label>
+        <div className="flex-1 min-w-[180px] max-w-sm">
+          <Input
+            value={search}
+            onChange={(e) => onSearch(e.target.value)}
+            placeholder={`Search ${OMNIVOICE_PRESETS.length} presets...`}
+            className="h-8 text-xs"
+          />
+        </div>
+      </div>
+
+      {selected && (
+        <div className="flex items-center gap-3 rounded-md border border-primary/30 bg-primary/5 p-3">
+          <VoiceAvatar id={selected.id} initials={selected.initials} size="md" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium truncate">{selected.name}</p>
+            <p className="text-[11px] text-muted-foreground truncate">
+              {selected.tagline}
+            </p>
+            <p className="text-[10px] text-muted-foreground/70 truncate mt-0.5">
+              {attrSummary(selected)}
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[320px] overflow-y-auto pr-1">
+        {presets.map((v) => {
+          const isSel = selected?.id === v.id;
+          return (
+            <button
+              key={v.id}
+              type="button"
+              onClick={() => onSelect(v)}
+              className={`flex items-center gap-2 rounded-md border p-2 text-left transition-colors ${
+                isSel
+                  ? "border-primary/60 bg-primary/5 ring-1 ring-primary/30"
+                  : "border-border bg-card hover:border-border/80 hover:bg-accent/40"
+              }`}
+            >
+              <VoiceAvatar id={v.id} initials={v.initials} size="sm" animated={false} />
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] font-medium truncate">{v.name}</p>
+                <p className="text-[9px] text-muted-foreground truncate">
+                  {v.tagline}
+                </p>
+              </div>
+            </button>
+          );
+        })}
+        {presets.length === 0 && (
+          <p className="col-span-full text-xs text-muted-foreground text-center py-6">
+            No presets match your search
+          </p>
+        )}
+      </div>
+      <p className="text-[10px] text-muted-foreground">
+        Presets set OmniVoice&apos;s Gender / Age / Pitch / Accent / Style
+        attributes via the{" "}
+        <code className="text-[10px] mx-0.5 px-1 rounded bg-muted">_design_fn</code>
+        endpoint.
+      </p>
+    </div>
+  );
+}
+
+function CharacterPanel({
+  text,
+  characters,
+  segments,
+  assignments,
+  segmentCountByCharacter,
+  identifying,
+  onIdentify,
+  onClear,
+  onAssign,
+  multiProgress,
+  multiErrors,
+}: {
+  text: string;
+  characters: ScriptCharacter[] | null;
+  segments: ScriptSegment[] | null;
+  assignments: CharacterAssignments;
+  segmentCountByCharacter: Record<string, number>;
+  identifying: boolean;
+  onIdentify: () => void;
+  onClear: () => void;
+  onAssign: (charName: string, preset: OmniVoicePreset) => void;
+  multiProgress: { done: number; total: number } | null;
+  multiErrors: string[];
+}) {
+  return (
+    <div className="space-y-4 rounded-lg border border-border bg-card/40 p-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <Label className="text-sm font-medium flex items-center gap-2">
+            <Users className="h-4 w-4" />
+            Multi-voice script
+          </Label>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            Claude splits your script into per-character lines. Assign an
+            OmniVoice preset to each character, then we synthesize and merge
+            every line into one audio file.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {characters && (
+            <Button variant="ghost" size="sm" onClick={onClear} disabled={identifying}>
+              <X className="h-3.5 w-3.5 mr-1" />
+              Reset
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant={characters ? "outline" : "default"}
+            onClick={onIdentify}
+            disabled={identifying || !text.trim()}
+            className="gap-1.5"
+          >
+            {identifying ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Wand2 className="h-3.5 w-3.5" />
+            )}
+            {characters ? "Re-identify" : "Identify Characters"}
+          </Button>
+        </div>
+      </div>
+
+      {/* No characters yet — empty state */}
+      {!characters && (
+        <div className="rounded-md border border-dashed border-border/70 p-4 text-center space-y-1">
+          <p className="text-sm text-muted-foreground">
+            Paste a script above, then click <strong>Identify Characters</strong>.
+          </p>
+          <p className="text-[11px] text-muted-foreground/70">
+            Works with plain dialogue (<code>Alice: …</code>), prose with
+            narration, or mixed formats.
+          </p>
+        </div>
+      )}
+
+      {/* Characters identified */}
+      {characters && segments && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+            <span>
+              <strong className="text-foreground">{characters.length}</strong>{" "}
+              character{characters.length === 1 ? "" : "s"}
+            </span>
+            <span>·</span>
+            <span>
+              <strong className="text-foreground">{segments.length}</strong>{" "}
+              segment{segments.length === 1 ? "" : "s"}
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {characters.map((c) => {
+              const assigned = assignments[c.name];
+              const lineCount = segmentCountByCharacter[c.name] || 0;
+              return (
+                <CharacterRow
+                  key={c.name}
+                  character={c}
+                  lineCount={lineCount}
+                  assigned={assigned}
+                  onAssign={(p) => onAssign(c.name, p)}
+                />
+              );
+            })}
+          </div>
+
+          {/* Multi-voice progress */}
+          {multiProgress && (
+            <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground flex items-center gap-2">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Generating segment {multiProgress.done} / {multiProgress.total}
+              {multiErrors.length > 0 &&
+                ` · ${multiErrors.length} failed so far`}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CharacterRow({
+  character,
+  lineCount,
+  assigned,
+  onAssign,
+}: {
+  character: ScriptCharacter;
+  lineCount: number;
+  assigned: OmniVoicePreset | null | undefined;
+  onAssign: (preset: OmniVoicePreset) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg border border-border bg-card/60 p-3 space-y-2">
+      <div className="flex items-center gap-3">
+        <VoiceAvatar
+          id={`char-${character.name}`}
+          initials={character.name.slice(0, 2).toUpperCase()}
+          size="md"
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm font-semibold truncate">{character.name}</p>
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+              {lineCount} line{lineCount === 1 ? "" : "s"}
+            </Badge>
+            {assigned && (
+              <Badge className="text-[10px] px-1.5 py-0 bg-primary/10 text-primary border-primary/20">
+                <Check className="h-2.5 w-2.5 mr-0.5" />
+                {assigned.name}
+              </Badge>
+            )}
+          </div>
+          {character.description && (
+            <p className="text-[11px] text-muted-foreground truncate mt-0.5">
+              {character.description}
+            </p>
+          )}
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setOpen((o) => !o)}
+          className="shrink-0 gap-1"
+        >
+          {open ? "Hide" : "Pick voice"}
+        </Button>
+      </div>
+
+      {open && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[220px] overflow-y-auto pr-1 pt-1 border-t border-border/60">
+          {OMNIVOICE_PRESETS.map((p) => {
+            const isSel = assigned?.id === p.id;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => {
+                  onAssign(p);
+                  setOpen(false);
+                }}
+                className={`flex items-center gap-2 rounded-md border p-2 text-left transition-colors ${
+                  isSel
+                    ? "border-primary/60 bg-primary/5 ring-1 ring-primary/30"
+                    : "border-border bg-card hover:border-border/80 hover:bg-accent/40"
+                }`}
+              >
+                <VoiceAvatar id={p.id} initials={p.initials} size="sm" animated={false} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[11px] font-medium truncate">{p.name}</p>
+                  <p className="text-[9px] text-muted-foreground truncate">
+                    {p.tagline}
+                  </p>
+                </div>
+                {isSel && <Check className="h-3 w-3 text-primary shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ModeButton({
@@ -680,4 +1120,101 @@ function SliderRow({
       {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Convert a preset into the attribute payload expected by /api/omnivoice/tts. */
+function presetToAttrs(p: OmniVoicePreset) {
+  return {
+    gender: p.gender,
+    age: p.age,
+    pitch: p.pitch,
+    style: p.style,
+    accent: p.accent,
+    dialect: p.dialect,
+  };
+}
+
+/** Pretty short-form attribute summary like "Female · Young Adult · American". */
+function attrSummary(p: OmniVoicePreset): string {
+  return [
+    p.gender?.split(" / ")[0],
+    p.age?.split(" / ")[0],
+    p.pitch?.split(" / ")[0],
+    p.accent?.split(" / ")[0],
+    p.style?.split(" / ")[0],
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** Base64 data URL of a file. */
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+/**
+ * Heuristic: pick a reasonable default preset for a newly-identified character
+ * based on their name. Falls back to cycling through the preset list so every
+ * character gets a different default voice out of the box.
+ */
+function guessPresetForCharacter(
+  c: ScriptCharacter,
+  index: number
+): OmniVoicePreset {
+  const name = c.name.toLowerCase();
+  const desc = (c.description || "").toLowerCase();
+  const hay = `${name} ${desc}`;
+
+  if (/narrator|narration/.test(hay)) {
+    return findPreset("ov-us-deep-male") || OMNIVOICE_PRESETS[1];
+  }
+  if (/grandpa|grandfather|old man|elder/.test(hay)) {
+    return findPreset("ov-us-grandpa") || OMNIVOICE_PRESETS[3];
+  }
+  if (/grandma|grandmother|elderly woman|old woman/.test(hay)) {
+    return findPreset("ov-elderly-wise") || OMNIVOICE_PRESETS[15];
+  }
+  if (/child|kid|boy|girl/.test(hay)) {
+    if (/girl/.test(hay)) return findPreset("ov-child-girl") || OMNIVOICE_PRESETS[11];
+    return findPreset("ov-child-boy") || OMNIVOICE_PRESETS[12];
+  }
+  if (/villain|evil|menacing|dark/.test(hay)) {
+    return findPreset("ov-villain") || OMNIVOICE_PRESETS[14];
+  }
+  if (/british|uk|english/.test(hay)) {
+    if (/woman|female|lady|girl/.test(hay)) {
+      return findPreset("ov-uk-classy-female") || OMNIVOICE_PRESETS[4];
+    }
+    return findPreset("ov-uk-deep-male") || OMNIVOICE_PRESETS[5];
+  }
+  if (/indian/.test(hay)) {
+    return (
+      (/woman|female|lady/.test(hay)
+        ? findPreset("ov-in-female-narrator")
+        : findPreset("ov-in-male-young")) || OMNIVOICE_PRESETS[7]
+    );
+  }
+  if (/whisper/.test(hay)) {
+    return findPreset("ov-whisper-female") || OMNIVOICE_PRESETS[13];
+  }
+
+  // Cycle defaults: alternate male / female for distinctness across rows
+  const cycle = index % 2 === 0
+    ? ["ov-us-warm-female", "ov-uk-classy-female", "ov-au-female", "ov-teen-bright"]
+    : ["ov-us-deep-male", "ov-uk-deep-male", "ov-ca-male", "ov-in-male-young"];
+  const id = cycle[Math.floor(index / 2) % cycle.length];
+  return findPreset(id) || OMNIVOICE_PRESETS[index % OMNIVOICE_PRESETS.length];
+}
+
+function findPreset(id: string): OmniVoicePreset | undefined {
+  return OMNIVOICE_PRESETS.find((p) => p.id === id);
 }

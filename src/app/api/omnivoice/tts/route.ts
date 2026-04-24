@@ -7,8 +7,7 @@ export const maxDuration = 300;
  *
  * Proxies to the k2-fsa/OmniVoice HuggingFace Space using Gradio's HTTP API.
  *
- * Request body (multipart or JSON — we accept JSON here, reference audio
- * comes as a base64 string or URL):
+ * Request body (JSON):
  * {
  *   "text": "Hello world",
  *   "language": "English",        // or "Auto"
@@ -23,23 +22,57 @@ export const maxDuration = 300;
  *   "duration"?: -1,              // -1 = auto
  *   "denoise"?: true,
  *   "preprocess_prompt"?: true,
- *   "postprocess_output"?: true
+ *   "postprocess_output"?: true,
+ *   // design mode only
+ *   "gender"?: "Auto" | "Male / 男" | "Female / 女",
+ *   "age"?: "Auto" | ...,
+ *   "pitch"?: "Auto" | ...,
+ *   "style"?: "Auto" | "Whisper / 耳语",
+ *   "accent"?: "Auto" | ...,
+ *   "dialect"?: "Auto" | ...
  * }
  *
  * Env vars:
- *   OMNIVOICE_SPACE_URL   default: https://k2-fsa-omnivoice.hf.space
- *                         override to point at your own pay-as-you-go
- *                         HF Inference Endpoint (same Gradio surface).
- *   HF_TOKEN              optional bearer token, required for private
- *                         endpoints or high rate limits.
+ *   OMNIVOICE_SPACE_URL   default: https://k2-fsa-omnivoice.hf.space (public Space,
+ *                         unreliable). Point at your own duplicated Space or HF
+ *                         Inference Endpoint for reliability.
+ *   HF_TOKEN              required if OMNIVOICE_SPACE_URL points at a private
+ *                         Space. Read-scope token is sufficient.
  *
  * Response: audio/wav stream.
  */
+
+const DEFAULT_SPACE_URL = "https://k2-fsa-omnivoice.hf.space";
+
+// GET /api/omnivoice/tts — simple health check that confirms which Space
+// URL is configured and whether a token is set. Useful for debugging prod
+// env-var wiring without having to trigger a full generation.
+export async function GET() {
+  const SPACE_URL = (process.env.OMNIVOICE_SPACE_URL || DEFAULT_SPACE_URL).replace(
+    /\/$/,
+    ""
+  );
+  const hasToken = !!process.env.HF_TOKEN;
+  const isPublicSpace = SPACE_URL === DEFAULT_SPACE_URL;
+  return Response.json({
+    ok: true,
+    space_url: SPACE_URL,
+    has_token: hasToken,
+    using_public_space: isPublicSpace,
+    notice: isPublicSpace
+      ? "Using the free public Space on Zero-GPU — it is often unavailable. " +
+        "Set OMNIVOICE_SPACE_URL to your duplicated paid Space for reliability."
+      : "Custom Space URL configured. Generation should be reliable.",
+  });
+}
+
 export async function POST(request: NextRequest) {
-  const SPACE_URL =
-    process.env.OMNIVOICE_SPACE_URL?.replace(/\/$/, "") ||
-    "https://k2-fsa-omnivoice.hf.space";
+  const SPACE_URL = (process.env.OMNIVOICE_SPACE_URL || DEFAULT_SPACE_URL).replace(
+    /\/$/,
+    ""
+  );
   const HF_TOKEN = process.env.HF_TOKEN || "";
+  const isPublicSpace = SPACE_URL === DEFAULT_SPACE_URL;
 
   let body: Record<string, unknown>;
   try {
@@ -75,7 +108,7 @@ export async function POST(request: NextRequest) {
   // Resolve the reference audio into a Gradio-compatible `FileData` object.
   // Gradio accepts either a URL ({url: "https://..."}) or a base64 dataURL
   // inside the same `url` field (it parses data: URLs).
-  let refAudioArg: null | { url: string; meta?: { _type?: string } } = null;
+  let refAudioArg: null | { url: string } = null;
   if (refAudioUrl) {
     refAudioArg = { url: refAudioUrl };
   } else if (refAudioB64) {
@@ -89,13 +122,12 @@ export async function POST(request: NextRequest) {
   // Merge emotion hints into the instruct prompt when in design mode — the
   // model can pick them up as tone direction.
   const instructFinal = emotionHint
-    ? (instruct ? `${instruct}. ${emotionHint}` : emotionHint)
+    ? instruct ? `${instruct}. ${emotionHint}` : emotionHint
     : instruct;
 
   // OmniVoice has TWO separate endpoints depending on mode:
   //   _clone_fn   — used when ref_audio is provided
   //   _design_fn  — used when describing via attribute dropdowns
-  // Signatures differ so we build the payload per-branch.
   const useClone = mode === "clone";
   const endpoint = useClone ? "_clone_fn" : "_design_fn";
 
@@ -120,9 +152,6 @@ export async function POST(request: NextRequest) {
         ],
       }
     : {
-        // _design_fn uses attribute dropdowns ("Auto" default) instead of a
-        // free-form instruct field. We default everything to Auto; power users
-        // can pass overrides via body.design.{gender,age,pitch,style,accent,dialect}.
         data: [
           cleanText,                                  // [0] text
           language,                                   // [1] language
@@ -142,16 +171,74 @@ export async function POST(request: NextRequest) {
         ],
       };
 
+  // Try up to 2 attempts: the Zero-GPU public Space often fails the first call
+  // after a cold boot and succeeds on retry. For paid Spaces the retry is
+  // essentially free (it only runs after a genuine error).
+  const MAX_ATTEMPTS = isPublicSpace ? 2 : 1;
+  let lastError = "";
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const result = await callSpaceOnce({
+      spaceUrl: SPACE_URL,
+      token: HF_TOKEN,
+      endpoint,
+      payload,
+    });
+    if (result.audio) {
+      return new Response(result.audio, {
+        headers: {
+          "Content-Type": result.contentType || "audio/wav",
+          "Content-Length": String(result.audio.byteLength),
+          "Content-Disposition": `inline; filename="omnivoice-${Date.now()}.wav"`,
+          "X-Generator": "omnivoice",
+          "X-Language": language,
+          "X-Mode": mode,
+          "X-Attempts": String(attempt),
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+    lastError = result.error || "unknown error";
+    // Only retry on transient errors, not user errors
+    const transient =
+      result.status >= 500 ||
+      /zero-size|ValueError|null|unavailable|timeout/i.test(lastError);
+    if (!transient) break;
+    if (attempt < MAX_ATTEMPTS) {
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+
+  // All attempts failed — return the last error with guidance.
+  const guidance = isPublicSpace
+    ? " — The free HF Space on Zero-GPU is unstable. Duplicate the Space with " +
+      "paid hardware and set OMNIVOICE_SPACE_URL + HF_TOKEN in your env vars."
+    : " — Your custom Space responded with an error. Check the Space logs " +
+      "at huggingface.co/spaces/<owner>/<name>?logs=container.";
+  return jsonError(502, lastError + guidance);
+}
+
+// ---------------------------------------------------------------------------
+// One-shot Gradio call: POST → event_id, GET SSE → { url | path } → fetch audio
+// ---------------------------------------------------------------------------
+async function callSpaceOnce(args: {
+  spaceUrl: string;
+  token: string;
+  endpoint: string;
+  payload: { data: unknown[] };
+}): Promise<
+  | { audio: ArrayBuffer; contentType: string; status: 200; error?: never }
+  | { audio: null; contentType?: never; status: number; error: string }
+> {
+  const { spaceUrl, token, endpoint, payload } = args;
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (HF_TOKEN) headers["Authorization"] = `Bearer ${HF_TOKEN}`;
+  if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  // Gradio 4/5/6 two-step call against the resolved endpoint name.
-  //   POST /gradio_api/call/<endpoint>      → { event_id }
-  //   GET  /gradio_api/call/<endpoint>/<id> → SSE with the result
-  const callUrl = `${SPACE_URL}/gradio_api/call/${endpoint}`;
+  const callUrl = `${spaceUrl}/gradio_api/call/${endpoint}`;
 
+  // Step 1: POST to start
   let eventId: string;
   try {
     const startResp = await fetch(callUrl, {
@@ -161,42 +248,44 @@ export async function POST(request: NextRequest) {
     });
     if (!startResp.ok) {
       const errText = await startResp.text().catch(() => "");
-      return jsonError(
-        startResp.status >= 500 ? 502 : startResp.status,
-        `OmniVoice start failed: ${errText || startResp.statusText}`
-      );
+      return {
+        audio: null,
+        status: startResp.status,
+        error: `Gradio start failed (${startResp.status}): ${errText || startResp.statusText}`,
+      };
     }
     const started = (await startResp.json()) as { event_id?: string };
     if (!started.event_id) {
-      return jsonError(502, "OmniVoice did not return an event_id");
+      return { audio: null, status: 502, error: "Gradio did not return an event_id" };
     }
     eventId = started.event_id;
   } catch (err) {
-    return jsonError(502, `OmniVoice unreachable: ${String(err)}`);
+    return { audio: null, status: 502, error: `Gradio unreachable: ${String(err)}` };
   }
 
-  // Poll / stream the result. Gradio returns SSE lines like:
-  //   event: complete
-  //   data: [{"url":"https://...wav","path":"..."},"info string"]
-  const resultUrl = `${SPACE_URL}/gradio_api/call/${endpoint}/${eventId}`;
+  // Step 2: GET SSE stream
+  const resultUrl = `${spaceUrl}/gradio_api/call/${endpoint}/${eventId}`;
   let audioUrl: string | null = null;
-  let audioData: string | null = null;
+  let completionInfo = "";
+  let sawError = false;
 
   try {
     const streamResp = await fetch(resultUrl, {
       method: "GET",
-      headers: HF_TOKEN ? { Authorization: `Bearer ${HF_TOKEN}` } : {},
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!streamResp.ok || !streamResp.body) {
-      return jsonError(502, `OmniVoice poll failed: ${streamResp.status}`);
+      return {
+        audio: null,
+        status: streamResp.status,
+        error: `Gradio poll failed: ${streamResp.status}`,
+      };
     }
 
-    // Read the SSE stream line-by-line until we see event: complete
     const reader = streamResp.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
     let currentEvent = "";
-    let completionInfo = "";
     outer: while (true) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -212,74 +301,72 @@ export async function POST(request: NextRequest) {
           if (currentEvent === "complete" || currentEvent === "generating") {
             try {
               const data = JSON.parse(dataStr);
-              // data is typically [outputArray, infoString]
               const first = Array.isArray(data) ? data[0] : null;
               const info = Array.isArray(data) && data.length > 1 ? data[1] : null;
               if (first && typeof first === "object") {
                 if (first.url) audioUrl = first.url;
-                else if (first.path) audioUrl = `${SPACE_URL}/gradio_api/file=${first.path}`;
+                else if (first.path) audioUrl = `${spaceUrl}/gradio_api/file=${first.path}`;
               }
               if (typeof info === "string") completionInfo = info;
-            } catch { /* ignore non-JSON status lines */ }
+            } catch {
+              /* non-JSON status frame, skip */
+            }
           }
           if (currentEvent === "complete") break outer;
           if (currentEvent === "error") {
-            return jsonError(
-              502,
-              `HF Space rejected this request (free Space on Zero-GPU is often ` +
-                `unavailable/unstable). Try again, switch to Clone mode with ` +
-                `your own reference audio, or point OMNIVOICE_SPACE_URL at ` +
-                `your own HF Inference Endpoint. Raw: ${dataStr}`
-            );
+            sawError = true;
+            // Attempt to extract the human-readable message
+            try {
+              const errData = JSON.parse(dataStr);
+              if (typeof errData === "string") completionInfo = errData;
+              else if (errData && typeof errData === "object") {
+                completionInfo =
+                  (errData as { message?: string }).message ||
+                  JSON.stringify(errData);
+              }
+            } catch {
+              completionInfo = dataStr || completionInfo;
+            }
+            break outer;
           }
         }
       }
     }
-
-    // OmniVoice occasionally completes with null audio + an info string like
-    // "Error: ValueError: ...". Surface that message rather than "null".
-    if (!audioUrl && completionInfo) {
-      const hint =
-        completionInfo.toLowerCase().includes("error") ||
-        completionInfo.toLowerCase().includes("valueerror")
-          ? "The free HF Space is currently failing. Try again in a moment, " +
-            "switch to Clone mode with your own reference audio, or deploy " +
-            "your own HF Inference Endpoint and set OMNIVOICE_SPACE_URL."
-          : "";
-      return jsonError(502, `${completionInfo}${hint ? " — " + hint : ""}`);
-    }
   } catch (err) {
-    return jsonError(504, `OmniVoice polling error: ${String(err)}`);
+    return { audio: null, status: 504, error: `Gradio poll error: ${String(err)}` };
   }
 
-  if (!audioUrl && !audioData) {
-    return jsonError(502, "OmniVoice finished without an audio URL");
+  if (!audioUrl) {
+    const msg = completionInfo || (sawError ? "Gradio returned an error event" : "empty result");
+    return { audio: null, status: 502, error: `OmniVoice: ${msg}` };
   }
 
-  // Fetch the generated audio and stream back to the caller as audio/wav
+  // Step 3: fetch the generated audio
   try {
-    const audioResp = await fetch(audioUrl!, {
-      headers: HF_TOKEN ? { Authorization: `Bearer ${HF_TOKEN}` } : {},
+    const audioResp = await fetch(audioUrl, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!audioResp.ok) {
-      return jsonError(502, `Failed to fetch generated audio: ${audioResp.status}`);
+      return {
+        audio: null,
+        status: audioResp.status,
+        error: `Failed to fetch generated audio: ${audioResp.status}`,
+      };
     }
     const audio = await audioResp.arrayBuffer();
-    return new Response(audio, {
-      headers: {
-        "Content-Type": audioResp.headers.get("Content-Type") || "audio/wav",
-        "Content-Length": String(audio.byteLength),
-        "Content-Disposition": `inline; filename="omnivoice-${Date.now()}.wav"`,
-        "X-Generator": "omnivoice",
-        "X-Language": language,
-        "X-Mode": mode,
-        "Cache-Control": "no-store",
-      },
-    });
+    return {
+      audio,
+      contentType: audioResp.headers.get("Content-Type") || "audio/wav",
+      status: 200,
+    };
   } catch (err) {
-    return jsonError(502, `Audio fetch failed: ${String(err)}`);
+    return { audio: null, status: 502, error: `Audio fetch failed: ${String(err)}` };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function jsonError(status: number, error: string): Response {
   return Response.json({ error, generator: "omnivoice" }, { status });
@@ -300,8 +387,6 @@ function clampFloat(v: unknown, min: number, max: number, def: number): number {
  * Parse Fish-Speech-style expression tags from user text.
  * - Pause tags become punctuation so the model naturally pauses.
  * - Emotion tags become an instruct-prompt suffix ("Voice it excitedly").
- * Returns { cleanText, emotionHint } — the text with all tags stripped and
- * a natural-language hint consumers can merge into their voice-direction.
  */
 function parseExpressions(text: string): { cleanText: string; emotionHint: string } {
   const emotions: string[] = [];
