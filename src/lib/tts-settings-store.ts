@@ -47,9 +47,27 @@ export interface CharacterVoiceAssignment {
   voice_name: string;
 }
 
+/**
+ * Which TTS engine the user has selected for the main Text-to-Speech page.
+ * - "fish-speech": Fish Speech S2-Pro (default) — general multilingual TTS with
+ *   voice cloning. Talks to /api/tts → backend /v1/tts.
+ * - "indic-parler": Indic Parler-TTS (Telugu) — description-based Telugu voices.
+ *   Talks to /api/v1/telugu/tts and only accepts Telugu voices.
+ */
+export type EngineId = "fish-speech" | "indic-parler";
+
+export const ENGINE_LABELS: Record<EngineId, string> = {
+  "fish-speech": "Fish Speech S2 Pro",
+  "indic-parler": "Indic Parler-TTS (Telugu)",
+};
+
 interface TTSSettingsStore {
   text: string;
   setText: (t: string) => void;
+  /** Active TTS engine for everything this store drives. Persisted via
+   * localStorage in the provider so user selection survives reloads. */
+  engine: EngineId;
+  setEngine: (e: EngineId) => void;
   selectedVoice: string;
   selectedVoiceData: EnrichedVoice | null;
   setSelectedVoice: (id: string) => void;
@@ -94,9 +112,38 @@ interface TTSSettingsStore {
   generateMultiVoice: () => Promise<void>;
 }
 
+// Hydrate engine from localStorage on mount so it survives page reloads.
+function readStoredEngine(): EngineId {
+  if (typeof localStorage === "undefined") return "fish-speech";
+  const v = localStorage.getItem("tts-engine");
+  return v === "indic-parler" ? "indic-parler" : "fish-speech";
+}
+
 export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
   text: "",
   setText: (t) => set({ text: t }),
+  engine: readStoredEngine(),
+  setEngine: (e) => {
+    set({ engine: e });
+    try {
+      localStorage.setItem("tts-engine", e);
+    } catch {
+      /* storage disabled — fine */
+    }
+    // Switching engines invalidates the current voice unless it's compatible
+    // (Telugu voices are `te-*`; Fish Speech covers everything else).
+    const st = get();
+    if (st.selectedVoiceData) {
+      const isTeluguVoice =
+        st.selectedVoiceData.name?.startsWith("te-") ||
+        (st.selectedVoiceData.language || "").toLowerCase() === "telugu";
+      const wantsTelugu = e === "indic-parler";
+      if (isTeluguVoice !== wantsTelugu) {
+        // Drop the voice so the user is forced to pick a compatible one.
+        set({ selectedVoice: "default", selectedVoiceData: null });
+      }
+    }
+  },
   selectedVoice: "default",
   selectedVoiceData: null,
   setSelectedVoice: (id) => set({ selectedVoice: id }),
@@ -236,6 +283,7 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
         voice_id: assignment.voice_id || undefined,
         voice_name: assignment.voice_name,
         format: state.format,
+        engine: state.engine,
         temperature: state.temperature,
         top_p: state.topP,
         repetition_penalty: state.repetitionPenalty,
@@ -284,6 +332,7 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
       useQueueStore.getState().addJob({
         text: state.text.trim(),
         format: state.format,
+        engine: state.engine,
         voice_id: voiceId,
         voice_name: voiceName,
         temperature: state.temperature,

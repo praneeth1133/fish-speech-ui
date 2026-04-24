@@ -15,12 +15,24 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { addHistoryItem } from "@/lib/idb";
 
+/**
+ * Which TTS engine to route this job through.
+ * - "fish-speech": /api/tts (Fish Speech S2 Pro, multilingual)
+ * - "indic-parler": /api/v1/telugu/tts (Indic Parler-TTS, Telugu-only)
+ * Kept in sync with EngineId in tts-settings-store but declared here so the
+ * queue has no dependency on the settings store.
+ */
+export type JobEngine = "fish-speech" | "indic-parler";
+
 export interface QueueJob {
   id: string;
   text: string;
   voice_id: string | null;
   voice_name: string;
   format: string;
+  /** Engine the job runs on. Defaults to "fish-speech" for back-compat with
+   * jobs persisted before this field existed. */
+  engine: JobEngine;
   /** JSON-stringified params used to recreate the request on retry */
   settings: string | null;
   status: "pending" | "processing" | "completed" | "failed";
@@ -52,6 +64,8 @@ export interface AddJobParams {
   voice_id?: string;
   voice_name?: string;
   format?: string;
+  /** Engine to run this job on. Defaults to "fish-speech". */
+  engine?: JobEngine;
   temperature?: number;
   top_p?: number;
   repetition_penalty?: number;
@@ -150,6 +164,7 @@ export const useQueueStore = create<QueueState>()(
           voice_id: params.voice_id || null,
           voice_name: params.voice_name || "Default",
           format: params.format || "wav",
+          engine: params.engine || "fish-speech",
           settings: JSON.stringify(settings),
           status: "pending",
           error: null,
@@ -250,20 +265,60 @@ export const useQueueStore = create<QueueState>()(
 
         try {
           const settings = next.settings ? JSON.parse(next.settings) : {};
-          const body: Record<string, unknown> = {
-            text: next.text,
-            format: next.format,
-            ...settings,
-          };
-          if (next.voice_id) {
-            body.reference_id = next.voice_id;
+          const jobEngine: JobEngine = next.engine || "fish-speech";
+
+          // Pick the right proxy endpoint + body shape per engine. The Telugu
+          // API expects `voice` (not `reference_id`) and restricts output
+          // format to wav/mp3.
+          let endpoint = "/api/tts";
+          let body: Record<string, unknown>;
+          if (jobEngine === "indic-parler") {
+            endpoint = "/api/v1/telugu/tts";
+            body = {
+              text: next.text,
+              format: next.format === "opus" ? "wav" : next.format,
+              voice: next.voice_id || undefined,
+              temperature: settings.temperature,
+              top_p: settings.top_p,
+              max_new_tokens: settings.max_new_tokens,
+              chunk_length: settings.chunk_length,
+            };
+          } else {
+            body = {
+              text: next.text,
+              format: next.format,
+              ...settings,
+            };
+            if (next.voice_id) body.reference_id = next.voice_id;
           }
 
-          const res = await fetch("/api/tts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
+          // Per-job timeout — if the backend tunnel is hung we'd rather see a
+          // clear "TTS generation timed out" in the queue row than a request
+          // that blocks forever.
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 180_000);
+          let res: Response;
+          try {
+            res = await fetch(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+              signal: controller.signal,
+            });
+          } catch (fetchErr) {
+            clearTimeout(timer);
+            if ((fetchErr as Error)?.name === "AbortError") {
+              throw new Error(
+                "TTS generation timed out after 3 minutes — the backend is likely offline. Check /api/health and restart your local Fish Speech server if needed."
+              );
+            }
+            throw new Error(
+              `Could not reach ${endpoint}: ${
+                fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
+              }`
+            );
+          }
+          clearTimeout(timer);
 
           if (!res.ok) {
             let errorMessage = `HTTP ${res.status}`;

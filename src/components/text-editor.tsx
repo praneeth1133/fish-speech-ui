@@ -21,6 +21,7 @@ const PROMPT_SUGGESTIONS = [
 export function TextEditor() {
   const text = useTTSSettingsStore((s) => s.text);
   const setText = useTTSSettingsStore((s) => s.setText);
+  const engine = useTTSSettingsStore((s) => s.engine);
   const isGenerating = useTTSSettingsStore((s) => s.isGenerating);
   const isAnnotating = useTTSSettingsStore((s) => s.isAnnotating);
   const isIdentifying = useTTSSettingsStore((s) => s.isIdentifying);
@@ -54,7 +55,9 @@ export function TextEditor() {
           Text to Speech
         </h1>
         <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
-          Fish Speech S2 Pro
+          {engine === "indic-parler"
+            ? "Indic Parler-TTS · Telugu"
+            : "Fish Speech S2 Pro · multilingual"}
         </p>
       </div>
 

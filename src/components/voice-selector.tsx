@@ -17,6 +17,7 @@ import type { EnrichedVoice } from "./voice-card";
 
 export function VoiceSelector() {
   const [open, setOpen] = useState(false);
+  const engine = useTTSSettingsStore((s) => s.engine);
   const selectedVoice = useTTSSettingsStore((s) => s.selectedVoice);
   const selectedVoiceData = useTTSSettingsStore((s) => s.selectedVoiceData);
   const setSelectedVoice = useTTSSettingsStore((s) => s.setSelectedVoice);
@@ -97,9 +98,13 @@ export function VoiceSelector() {
           className="w-[440px] sm:max-w-[440px] p-0"
         >
           <SheetHeader className="px-5 pt-5 pb-3">
-            <SheetTitle>Voice Library</SheetTitle>
+            <SheetTitle>
+              {engine === "indic-parler" ? "Telugu Voices" : "Voice Library"}
+            </SheetTitle>
             <SheetDescription>
-              Choose a voice for your generation
+              {engine === "indic-parler"
+                ? "Indic Parler-TTS voices for Telugu generation only."
+                : "All 173+ Fish Speech reference voices."}
             </SheetDescription>
           </SheetHeader>
           <div className="px-5 pb-5 overflow-y-auto flex-1">
@@ -107,6 +112,7 @@ export function VoiceSelector() {
               selectedVoice={selectedVoice}
               onSelectVoice={handleSelect}
               showDefaultVoice={true}
+              engineFilter={engine}
             />
           </div>
         </SheetContent>

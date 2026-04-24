@@ -16,12 +16,17 @@ interface VoicePickerProps {
   selectedVoice: string;
   onSelectVoice: (voiceId: string) => void;
   showDefaultVoice?: boolean;
+  /** When set, only show voices compatible with that engine. Main TTS page
+   * uses this to hide Fish Speech voices from Telugu mode and vice versa.
+   * OmniVoice has its own picker on /omnivoice and ignores this prop. */
+  engineFilter?: "fish-speech" | "indic-parler";
 }
 
 export function VoicePicker({
   selectedVoice,
   onSelectVoice,
   showDefaultVoice = true,
+  engineFilter,
 }: VoicePickerProps) {
   const [voices, setVoices] = useState<EnrichedVoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,6 +54,18 @@ export function VoicePicker({
     return voices
       .filter((v) => {
         if (!v.is_backend_ref) return false;
+
+        // Engine scope — Telugu voices only for Indic Parler, everything
+        // non-Telugu for Fish Speech. `te-*` is the reliable marker; some
+        // voices also carry language: "telugu" metadata.
+        if (engineFilter) {
+          const isTelugu =
+            v.name?.startsWith("te-") ||
+            (v.language || "").toLowerCase() === "telugu";
+          if (engineFilter === "indic-parler" && !isTelugu) return false;
+          if (engineFilter === "fish-speech" && isTelugu) return false;
+        }
+
         const matchesSearch =
           !search ||
           (v.displayName || v.name).toLowerCase().includes(search.toLowerCase()) ||
@@ -63,7 +80,7 @@ export function VoicePicker({
       // Newest (most recently added) voices first
       .sort((a, b) => ((b as EnrichedVoice & { mtime?: number }).mtime || 0)
         - ((a as EnrichedVoice & { mtime?: number }).mtime || 0));
-  }, [voices, search, selectedLanguage, selectedGender]);
+  }, [voices, search, selectedLanguage, selectedGender, engineFilter]);
 
   const languageCounts = useMemo(() => {
     const counts: Record<string, number> = { all: 0 };

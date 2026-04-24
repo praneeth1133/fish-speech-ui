@@ -11,11 +11,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import { Sparkles, SlidersHorizontal, X } from "lucide-react";
+import { Sparkles, SlidersHorizontal, X, Languages } from "lucide-react";
 import { VoiceSelector } from "./voice-selector";
 import { QueuePanel } from "./queue-panel";
-import { useTTSSettingsStore } from "@/lib/tts-settings-store";
+import { useTTSSettingsStore, type EngineId } from "@/lib/tts-settings-store";
 import { useState } from "react";
 
 function SettingSlider({
@@ -69,6 +68,8 @@ function SettingSlider({
 }
 
 function SettingsContent() {
+  const engine = useTTSSettingsStore((s) => s.engine);
+  const setEngine = useTTSSettingsStore((s) => s.setEngine);
   const temperature = useTTSSettingsStore((s) => s.temperature);
   const setTemperature = useTTSSettingsStore((s) => s.setTemperature);
   const topP = useTTSSettingsStore((s) => s.topP);
@@ -90,13 +91,47 @@ function SettingsContent() {
         <Label className="text-xs text-muted-foreground uppercase tracking-wider font-medium">
           Model
         </Label>
-        <div className="flex items-center gap-2 p-3 rounded-lg border border-border bg-muted/50">
-          <Badge variant="secondary" className="gap-1 text-[10px]">
-            <Sparkles className="h-2.5 w-2.5" />
-            S2
-          </Badge>
-          <span className="text-sm text-muted-foreground">Fish Speech S2 Pro</span>
-        </div>
+        <Select
+          value={engine}
+          onValueChange={(v) => {
+            if (v === "fish-speech" || v === "indic-parler") {
+              setEngine(v as EngineId);
+            }
+          }}
+        >
+          <SelectTrigger className="h-auto py-2.5 bg-muted/50 border-border">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="fish-speech">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-3.5 w-3.5 text-primary" />
+                <div className="flex flex-col items-start">
+                  <span className="text-sm font-medium">Fish Speech S2 Pro</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    Multilingual · voice cloning · 173+ voices
+                  </span>
+                </div>
+              </div>
+            </SelectItem>
+            <SelectItem value="indic-parler">
+              <div className="flex items-center gap-2">
+                <Languages className="h-3.5 w-3.5 text-primary" />
+                <div className="flex flex-col items-start">
+                  <span className="text-sm font-medium">Indic Parler-TTS</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    Telugu only · description-based voices
+                  </span>
+                </div>
+              </div>
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-[10px] text-muted-foreground/70">
+          {engine === "indic-parler"
+            ? "Voice list is filtered to Telugu voices only. Output routes through /api/v1/telugu/tts."
+            : "Voice list shows all reference voices. Output routes through /api/tts."}
+        </p>
       </div>
 
       <Separator className="bg-border" />
