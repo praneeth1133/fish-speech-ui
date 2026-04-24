@@ -122,20 +122,48 @@ export default function VoicesPage() {
       .catch(() => setHistory([]));
   }, []);
 
-  // Convert any audio blob to WAV so the Fish Speech backend can always read it.
-  // The backend uses torchaudio which may not support webm/mp3/ogg depending on
-  // the ffmpeg build. WAV always works.
+  // Convert any audio blob to WAV so the Fish Speech backend can always read
+  // it, AND trim to at most MAX_REF_SECONDS so cloning never hangs. Fish
+  // Speech's reference model expects 5–10 second clips; anything over ~20s
+  // makes inference take forever or time out completely (exactly what broke
+  // "aasha-amamma" with a 39-second clip on 2026-04-24).
+  //
+  // We always decode → optionally trim → re-encode, even for inputs that are
+  // already WAV, because we have no way to know the duration of an arbitrary
+  // WAV file without decoding it.
+  const MAX_REF_SECONDS = 15;
   const ensureWav = async (blob: Blob): Promise<Blob> => {
-    // If it's already a WAV, skip conversion
-    if (blob.type === "audio/wav" || blob.type === "audio/wave") return blob;
     try {
       const ctx = new (window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext })
           .webkitAudioContext)();
       const arrayBuffer = await blob.arrayBuffer();
       const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+
+      let outBuf = decoded;
+      if (decoded.duration > MAX_REF_SECONDS) {
+        const targetSamples = Math.floor(MAX_REF_SECONDS * decoded.sampleRate);
+        const trimmed = ctx.createBuffer(
+          decoded.numberOfChannels,
+          targetSamples,
+          decoded.sampleRate
+        );
+        for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+          const src = decoded.getChannelData(ch);
+          trimmed.copyToChannel(src.subarray(0, targetSamples), ch);
+        }
+        outBuf = trimmed;
+        toast.info(
+          `Reference trimmed to ${MAX_REF_SECONDS}s`,
+          {
+            description:
+              `Fish Speech cloning works best with short clips. Your ${decoded.duration.toFixed(1)}s file was shortened automatically.`,
+          }
+        );
+      }
+
       await ctx.close();
-      return audioBufferToWav(decoded);
+      return audioBufferToWav(outBuf);
     } catch (err) {
       console.warn("WAV conversion failed, sending original:", err);
       return blob; // fallback: send as-is and hope the backend handles it
