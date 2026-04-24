@@ -92,35 +92,65 @@ export async function POST(request: NextRequest) {
     ? (instruct ? `${instruct}. ${emotionHint}` : emotionHint)
     : instruct;
 
-  // Build the payload matching OmniVoice's _gen_core signature.
-  // Exact order matters for Gradio — see app.py in the Space.
-  const payload = {
-    data: [
-      cleanText,                  // text (expression tags stripped)
-      language,                   // language
-      refAudioArg,                // ref_audio (FileData | null)
-      instructFinal,              // instruct (voice design prompt + emotion)
-      numStep,                    // num_step
-      guidanceScale,              // guidance_scale
-      denoise,                    // denoise
-      speed,                      // speed
-      duration,                   // duration
-      preprocess,                 // preprocess_prompt
-      postprocess,                // postprocess_output
-      mode,                       // mode
-      refText,                    // ref_text
-    ],
-  };
+  // OmniVoice has TWO separate endpoints depending on mode:
+  //   _clone_fn   — used when ref_audio is provided
+  //   _design_fn  — used when describing via attribute dropdowns
+  // Signatures differ so we build the payload per-branch.
+  const useClone = mode === "clone";
+  const endpoint = useClone ? "_clone_fn" : "_design_fn";
+
+  // Duration as number ("" in Gradio = null/auto)
+  const durationArg = duration >= 0 ? duration : null;
+
+  const payload = useClone
+    ? {
+        data: [
+          cleanText,      // [0] text
+          language,       // [1] language
+          refAudioArg,    // [2] ref_audio (FileData | null)
+          refText,        // [3] ref_text
+          instructFinal,  // [4] instruct
+          numStep,        // [5] inference steps
+          guidanceScale,  // [6] guidance scale
+          denoise,        // [7] denoise
+          speed,          // [8] speed
+          durationArg,    // [9] duration
+          preprocess,     // [10] preprocess_prompt
+          postprocess,    // [11] postprocess_output
+        ],
+      }
+    : {
+        // _design_fn uses attribute dropdowns ("Auto" default) instead of a
+        // free-form instruct field. We default everything to Auto; power users
+        // can pass overrides via body.design.{gender,age,pitch,style,accent,dialect}.
+        data: [
+          cleanText,                                  // [0] text
+          language,                                   // [1] language
+          numStep,                                    // [2] steps
+          guidanceScale,                              // [3] cfg
+          denoise,                                    // [4] denoise
+          speed,                                      // [5] speed
+          durationArg,                                // [6] duration
+          preprocess,                                 // [7] preprocess
+          postprocess,                                // [8] postprocess
+          (body.gender as string) || "Auto",          // [9] gender
+          (body.age as string) || "Auto",             // [10] age
+          (body.pitch as string) || "Auto",           // [11] pitch
+          (body.style as string) || "Auto",           // [12] style
+          (body.accent as string) || "Auto",          // [13] English accent
+          (body.dialect as string) || "Auto",         // [14] Chinese dialect
+        ],
+      };
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   if (HF_TOKEN) headers["Authorization"] = `Bearer ${HF_TOKEN}`;
 
-  // Gradio 4/5/6 two-step call:
-  //   POST /gradio_api/call/generate_fn      → { event_id }
-  //   GET  /gradio_api/call/generate_fn/<id> → SSE with the result
-  const callUrl = `${SPACE_URL}/gradio_api/call/generate_fn`;
+  // Gradio 4/5/6 two-step call against the resolved endpoint name.
+  //   POST /gradio_api/call/<endpoint>      → { event_id }
+  //   GET  /gradio_api/call/<endpoint>/<id> → SSE with the result
+  const callUrl = `${SPACE_URL}/gradio_api/call/${endpoint}`;
 
   let eventId: string;
   try {
@@ -148,7 +178,7 @@ export async function POST(request: NextRequest) {
   // Poll / stream the result. Gradio returns SSE lines like:
   //   event: complete
   //   data: [{"url":"https://...wav","path":"..."},"info string"]
-  const resultUrl = `${SPACE_URL}/gradio_api/call/generate_fn/${eventId}`;
+  const resultUrl = `${SPACE_URL}/gradio_api/call/${endpoint}/${eventId}`;
   let audioUrl: string | null = null;
   let audioData: string | null = null;
 
