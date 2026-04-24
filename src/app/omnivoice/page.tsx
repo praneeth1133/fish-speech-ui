@@ -27,7 +27,7 @@ import {
 import { toast } from "sonner";
 import { makeDownloadName } from "@/lib/download-name";
 import { VoiceAvatar } from "@/components/voice-avatar";
-import { VoicePreviewPlayer } from "@/components/voice-preview-player";
+import { OMNIVOICE_PRESETS, type OmniVoicePreset } from "@/lib/omnivoice-presets";
 
 // Curated set of common languages; the model supports 600+ so "Auto" is fine
 // when the user doesn't want to pick. Users can type any BCP-47 name in the
@@ -65,20 +65,6 @@ const LANGUAGES = [
   "Greek",
 ];
 
-interface PresetVoice {
-  id: string;
-  name: string;
-  displayName?: string;
-  tagline?: string;
-  gender?: string;
-  avatarInitials?: string;
-  previewUrl?: string;
-  is_backend_ref?: boolean;
-  mtime?: number;
-  language?: string;
-  country?: string;
-}
-
 export default function OmniVoicePage() {
   const [text, setText] = useState(
     "Hello from OmniVoice — a text-to-speech model that speaks over 600 languages."
@@ -91,8 +77,9 @@ export default function OmniVoicePage() {
   const [refAudio, setRefAudio] = useState<File | null>(null);
   const [refAudioUrl, setRefAudioUrl] = useState<string | null>(null);
   const [refText, setRefText] = useState("");
-  const [presetVoices, setPresetVoices] = useState<PresetVoice[]>([]);
-  const [selectedPreset, setSelectedPreset] = useState<PresetVoice | null>(null);
+  const [selectedPreset, setSelectedPreset] = useState<OmniVoicePreset | null>(
+    OMNIVOICE_PRESETS[0]
+  );
   const [presetSearch, setPresetSearch] = useState("");
   const [numStep, setNumStep] = useState(32);
   const [guidanceScale, setGuidanceScale] = useState(2.0);
@@ -113,41 +100,19 @@ export default function OmniVoicePage() {
     };
   }, [resultUrl, refAudioUrl]);
 
-  // Load the Fish Speech reference library as OmniVoice voice presets.
-  // Each reference has a static sample.wav already — OmniVoice treats that
-  // as its clone reference, so we get 150+ presets for free.
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/voices")
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return;
-        const list: PresetVoice[] = (data.voices || [])
-          .filter((v: PresetVoice) => v.is_backend_ref)
-          .sort(
-            (a: PresetVoice, b: PresetVoice) =>
-              (b.mtime || 0) - (a.mtime || 0)
-          );
-        setPresetVoices(list);
-        // Default to the first voice so the page is immediately usable
-        if (!selectedPreset && list.length > 0) setSelectedPreset(list[0]);
-      })
-      .catch(() => setPresetVoices([]));
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const filteredPresets = presetVoices.filter((v) => {
+  // OmniVoice-native presets: curated combinations of OmniVoice's own
+  // Design attribute dropdowns (gender / age / pitch / style / accent).
+  // Unlike Fish Speech, OmniVoice has no built-in reference audio library,
+  // so "presets" here are attribute bundles — no external audio involved.
+  const filteredPresets = OMNIVOICE_PRESETS.filter((v) => {
     const q = presetSearch.trim().toLowerCase();
     if (!q) return true;
     return (
-      (v.displayName || v.name).toLowerCase().includes(q) ||
-      (v.tagline || "").toLowerCase().includes(q) ||
+      v.name.toLowerCase().includes(q) ||
+      v.tagline.toLowerCase().includes(q) ||
       (v.gender || "").toLowerCase().includes(q) ||
-      (v.language || "").toLowerCase().includes(q) ||
-      (v.country || "").toLowerCase().includes(q)
+      (v.age || "").toLowerCase().includes(q) ||
+      (v.accent || "").toLowerCase().includes(q)
     );
   });
 
@@ -175,19 +140,25 @@ export default function OmniVoicePage() {
     setIsGenerating(true);
     setResultUrl(null);
     try {
-      // Convert reference audio to base64 so we can send JSON (simpler than
-      // multipart + easier to proxy to the Gradio API on the server).
+      // Build the request body. Clone uploads a custom audio; Design and
+      // Preset both hit OmniVoice's _design_fn (attribute dropdowns).
       let refAudioB64: string | undefined;
-      let refAudioUrlRemote: string | undefined;
+      let apiMode: "clone" | "design" = "design";
+      let presetAttrs: Partial<OmniVoicePreset> = {};
+
       if (mode === "clone" && refAudio) {
         refAudioB64 = await fileToDataUrl(refAudio);
+        apiMode = "clone";
       } else if (mode === "preset" && selectedPreset) {
-        // The preset's sample is served as a static WAV by the backend at
-        // /api/voice-preview/<id>. Give OmniVoice a fully-qualified URL it
-        // can fetch — the proxy will accept either a URL or a base64 blob.
-        refAudioUrlRemote = selectedPreset.previewUrl?.startsWith("http")
-          ? selectedPreset.previewUrl
-          : `${window.location.origin}${selectedPreset.previewUrl || `/api/voice-preview/${selectedPreset.name}`}`;
+        apiMode = "design";
+        presetAttrs = {
+          gender: selectedPreset.gender,
+          age: selectedPreset.age,
+          pitch: selectedPreset.pitch,
+          style: selectedPreset.style,
+          accent: selectedPreset.accent,
+          dialect: selectedPreset.dialect,
+        };
       }
 
       const res = await fetch("/api/omnivoice/tts", {
@@ -196,12 +167,17 @@ export default function OmniVoicePage() {
         body: JSON.stringify({
           text,
           language,
-          // OmniVoice itself only knows clone vs design, so preset maps to clone.
-          mode: mode === "design" ? "design" : "clone",
+          mode: apiMode,
           ref_audio_b64: refAudioB64,
-          ref_audio_url: refAudioUrlRemote,
           ref_text: refText,
           instruct: mode === "design" ? instruct : "",
+          // Attribute dropdowns for design (and preset)
+          gender: presetAttrs.gender,
+          age: presetAttrs.age,
+          pitch: presetAttrs.pitch,
+          style: presetAttrs.style,
+          accent: presetAttrs.accent,
+          dialect: presetAttrs.dialect,
           num_step: numStep,
           guidance_scale: guidanceScale,
           speed,
@@ -347,13 +323,13 @@ export default function OmniVoicePage() {
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <Label className="text-sm font-medium flex items-center gap-2">
                   <Library className="h-4 w-4" />
-                  Voice preset
+                  OmniVoice voice preset
                 </Label>
                 <div className="flex-1 min-w-[180px] max-w-sm">
                   <Input
                     value={presetSearch}
                     onChange={(e) => setPresetSearch(e.target.value)}
-                    placeholder={`Search ${presetVoices.length} voices...`}
+                    placeholder={`Search ${OMNIVOICE_PRESETS.length} presets...`}
                     className="h-8 text-xs"
                   />
                 </div>
@@ -362,28 +338,35 @@ export default function OmniVoicePage() {
               {selectedPreset && (
                 <div className="flex items-center gap-3 rounded-md border border-primary/30 bg-primary/5 p-3">
                   <VoiceAvatar
-                    id={selectedPreset.name}
-                    initials={selectedPreset.avatarInitials || selectedPreset.name.slice(0, 2).toUpperCase()}
+                    id={selectedPreset.id}
+                    initials={selectedPreset.initials}
                     size="md"
                   />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">
-                      {selectedPreset.displayName || selectedPreset.name}
+                      {selectedPreset.name}
                     </p>
                     <p className="text-[11px] text-muted-foreground truncate">
-                      {selectedPreset.tagline || selectedPreset.name}
+                      {selectedPreset.tagline}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground/70 truncate mt-0.5">
+                      {[
+                        selectedPreset.gender?.split(" / ")[0],
+                        selectedPreset.age?.split(" / ")[0],
+                        selectedPreset.pitch?.split(" / ")[0],
+                        selectedPreset.accent?.split(" / ")[0],
+                        selectedPreset.style?.split(" / ")[0],
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </p>
                   </div>
-                  {selectedPreset.previewUrl && (
-                    <VoicePreviewPlayer src={selectedPreset.previewUrl} compact iconOnly />
-                  )}
                 </div>
               )}
 
-              {/* Grid of presets — 3–4 per row */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[280px] overflow-y-auto pr-1">
-                {filteredPresets.slice(0, 80).map((v) => {
-                  const isSel = selectedPreset?.name === v.name;
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[320px] overflow-y-auto pr-1">
+                {filteredPresets.map((v) => {
+                  const isSel = selectedPreset?.id === v.id;
                   return (
                     <button
                       key={v.id}
@@ -396,17 +379,15 @@ export default function OmniVoicePage() {
                       }`}
                     >
                       <VoiceAvatar
-                        id={v.name}
-                        initials={v.avatarInitials || v.name.slice(0, 2).toUpperCase()}
+                        id={v.id}
+                        initials={v.initials}
                         size="sm"
                         animated={false}
                       />
                       <div className="flex-1 min-w-0">
-                        <p className="text-[11px] font-medium truncate">
-                          {v.displayName || v.name}
-                        </p>
+                        <p className="text-[11px] font-medium truncate">{v.name}</p>
                         <p className="text-[9px] text-muted-foreground truncate">
-                          {v.tagline || v.gender || ""}
+                          {v.tagline}
                         </p>
                       </div>
                     </button>
@@ -414,15 +395,16 @@ export default function OmniVoicePage() {
                 })}
                 {filteredPresets.length === 0 && (
                   <p className="col-span-full text-xs text-muted-foreground text-center py-6">
-                    No voices match your search
+                    No presets match your search
                   </p>
                 )}
               </div>
-              {filteredPresets.length > 80 && (
-                <p className="text-[10px] text-muted-foreground">
-                  Showing 80 of {filteredPresets.length} — narrow your search to see more
-                </p>
-              )}
+              <p className="text-[10px] text-muted-foreground">
+                Presets set OmniVoice's Gender / Age / Pitch / Accent / Style
+                attributes. No reference audio needed — this uses the
+                <code className="text-[10px] mx-1 px-1 rounded bg-muted">_design_fn</code>
+                endpoint on the HF Space.
+              </p>
             </div>
           ) : mode === "clone" ? (
             <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
