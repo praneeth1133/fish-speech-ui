@@ -99,6 +99,10 @@ export async function POST(request: NextRequest) {
   const refText = (body.ref_text as string) || "";
   const fishSpeechVoiceId = body.fish_speech_voice_id as string | undefined;
 
+  // Holds the Gradio file upload path (set either from a Fish Speech bridge
+  // voice or from a user-provided base64/url clone upload).
+  let uploadedRefPath: string | null = null;
+
   // When a Fish Speech voice id is supplied, pull its reference WAV directly
   // from the local backend and feed it into OmniVoice's _clone_fn. This is
   // how we make every Fish Speech reference voice available inside OmniVoice
@@ -122,12 +126,59 @@ export async function POST(request: NextRequest) {
       }
       const wavBuf = await sampleResp.arrayBuffer();
       const contentType = sampleResp.headers.get("Content-Type") || "audio/wav";
-      refAudioB64 = `data:${contentType};base64,${Buffer.from(wavBuf).toString("base64")}`;
+      // Upload into Gradio's sandbox first. Passing a raw data URL in the
+      // FileData payload makes Gradio 5 pydantic reject it with a
+      // "ValidationError: 1 validation error for FileData" — the modern
+      // queue API wants an actual /tmp/gradio/<path> that the Space has
+      // already accepted via its /upload endpoint.
+      const space = (process.env.OMNIVOICE_SPACE_URL || DEFAULT_SPACE_URL).replace(/\/$/, "");
+      const token = process.env.HF_TOKEN || "";
+      uploadedRefPath = await uploadToGradio(
+        space,
+        token,
+        new Uint8Array(wavBuf),
+        `${fishSpeechVoiceId}.wav`,
+        contentType
+      );
       mode = "clone"; // Force clone mode whenever a Fish Speech voice is attached
     } catch (err) {
       return jsonError(
         502,
-        `Couldn't reach Fish Speech backend to load reference: ${String(err)}`
+        `Couldn't stage Fish Speech reference for OmniVoice: ${String(err)}`
+      );
+    }
+  }
+
+  // If the caller sent an inline clone upload (Clone mode), stage it through
+  // Gradio's /upload too so the FileData object we pass to _clone_fn always
+  // points at a Space-hosted path, never a data URL.
+  if (!uploadedRefPath && (refAudioB64 || refAudioUrl)) {
+    try {
+      let bytes: Uint8Array;
+      let filename = "reference.wav";
+      let ctype = "audio/wav";
+      if (refAudioB64) {
+        const match = refAudioB64.match(/^data:([^;]+);base64,(.*)$/);
+        const dataPart = match ? match[2] : refAudioB64;
+        ctype = match?.[1] || "audio/wav";
+        bytes = Buffer.from(dataPart, "base64");
+      } else if (refAudioUrl) {
+        const r = await fetch(refAudioUrl);
+        if (!r.ok) throw new Error(`Could not fetch ref audio URL: ${r.status}`);
+        bytes = new Uint8Array(await r.arrayBuffer());
+        ctype = r.headers.get("Content-Type") || ctype;
+      } else {
+        bytes = new Uint8Array();
+      }
+      if (bytes.length > 0) {
+        const space = (process.env.OMNIVOICE_SPACE_URL || DEFAULT_SPACE_URL).replace(/\/$/, "");
+        const token = process.env.HF_TOKEN || "";
+        uploadedRefPath = await uploadToGradio(space, token, bytes, filename, ctype);
+      }
+    } catch (err) {
+      return jsonError(
+        502,
+        `Couldn't stage reference audio for OmniVoice: ${String(err)}`
       );
     }
   }
@@ -140,19 +191,21 @@ export async function POST(request: NextRequest) {
   const preprocess = body.preprocess_prompt !== false;
   const postprocess = body.postprocess_output !== false;
 
-  // Resolve the reference audio into a Gradio-compatible `FileData` object.
-  // Gradio accepts either a URL ({url: "https://..."}) or a base64 dataURL
-  // inside the same `url` field (it parses data: URLs).
-  let refAudioArg: null | { url: string } = null;
-  if (refAudioUrl) {
-    refAudioArg = { url: refAudioUrl };
-  } else if (refAudioB64) {
-    refAudioArg = {
-      url: refAudioB64.startsWith("data:")
-        ? refAudioB64
-        : `data:audio/wav;base64,${refAudioB64}`,
-    };
-  }
+  // Build a Gradio 5-compliant FileData payload. The queue-based endpoint
+  // requires a real server-side `path` (returned by /gradio_api/upload) plus
+  // the {_type: "gradio.FileData"} marker on meta; any other shape trips
+  // pydantic validation with "1 validation error for FileData".
+  const refAudioArg = uploadedRefPath
+    ? {
+        path: uploadedRefPath,
+        orig_name: uploadedRefPath.split("/").pop() || "reference.wav",
+        mime_type: "audio/wav",
+        size: null,
+        url: null,
+        is_stream: false,
+        meta: { _type: "gradio.FileData" },
+      }
+    : null;
 
   // Merge emotion hints into the instruct prompt when in design mode — the
   // model can pick them up as tone direction.
@@ -414,6 +467,50 @@ interface QueueMessage {
     data?: unknown[];
     error?: unknown;
   };
+}
+
+/**
+ * Upload a WAV blob to the Gradio Space's /upload endpoint and return the
+ * server-side /tmp/gradio/... path the Space issued. That path is what we
+ * feed into the FileData object passed to _clone_fn — anything else (raw
+ * data URLs, external HTTP URLs) fails pydantic validation in Gradio 5+.
+ *
+ * Endpoint: POST /gradio_api/upload?upload_id=<hash>
+ *   body: multipart/form-data with one "files" field
+ *   response: ["/tmp/gradio/<hash>/<origname>"]
+ */
+async function uploadToGradio(
+  spaceUrl: string,
+  token: string,
+  bytes: Uint8Array,
+  filename: string,
+  contentType: string
+): Promise<string> {
+  const uploadId = randomSessionHash();
+  // Use a Blob so the runtime builds a real multipart body with proper boundary.
+  // Copy into a standalone ArrayBuffer so the DOM Blob type accepts it (avoids
+  // a "Uint8Array<ArrayBufferLike> not assignable to BlobPart" TS error that
+  // surfaces when the source buffer might be a SharedArrayBuffer).
+  const ab = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(ab).set(bytes);
+  const blob = new Blob([ab], { type: contentType });
+  const form = new FormData();
+  form.append("files", blob, filename);
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const resp = await fetch(
+    `${spaceUrl}/gradio_api/upload?upload_id=${encodeURIComponent(uploadId)}`,
+    { method: "POST", body: form, headers }
+  );
+  if (!resp.ok) {
+    const txt = await resp.text().catch(() => "");
+    throw new Error(`Gradio upload failed (${resp.status}): ${txt || resp.statusText}`);
+  }
+  const paths = (await resp.json()) as string[];
+  if (!Array.isArray(paths) || typeof paths[0] !== "string") {
+    throw new Error("Gradio upload returned no path");
+  }
+  return paths[0];
 }
 
 function randomSessionHash(): string {
