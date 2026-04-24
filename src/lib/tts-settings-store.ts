@@ -330,15 +330,25 @@ export const useTTSSettingsStore = create<TTSSettingsStore>((set, get) => ({
         voiceName = voice.displayName || voice.name;
       }
 
-      // Target ~1 minute of audio per single-voice request. Fish Speech
-      // runs at roughly real-time on a consumer GPU, and Vercel Hobby with
-      // Fluid Compute gives us up to 300 s per serverless invocation, so
-      // keeping each chunk to roughly a minute of speech (~900 chars for
-      // typical English prose, measured empirically on Fish Speech S2-Pro)
-      // sits comfortably inside that budget without fragmenting short
-      // messages. Anything under this stays a single request — no stitching,
-      // no merged history entry, no "Split into N" toast.
-      const MAX_SINGLE_REQUEST_CHARS = 900;
+      // Only split when a single voice would clearly exceed Vercel's
+      // serverless budget. Fish Speech runs at roughly real-time on a
+      // consumer GPU, and Vercel Hobby with Fluid Compute allows up to
+      // 300 s per invocation. Two things matter here:
+      //
+      //   1. Expression tags like [neutral] / [excited] / [dramatic pause]
+      //      inflate raw character count significantly but Fish Speech
+      //      strips them before synthesis — so a 1000-char tagged story
+      //      often becomes ~600-700 chars of actual speech (~45 s of audio).
+      //   2. The Fish Speech backend chunks input internally by chunk_length
+      //      (default 200), so we don't need to chunk ourselves for
+      //      quality — only to keep each HTTP round-trip short enough to
+      //      complete inside the Vercel function window.
+      //
+      // 1500 chars is our practical ceiling: ~90 s of generation at
+      // real-time, safe margin under the 300 s cap, and it keeps typical
+      // short stories, dialogues, and single-minute monologues as one
+      // seamless job.
+      const MAX_SINGLE_REQUEST_CHARS = 1500;
       const chunks =
         fullText.length > MAX_SINGLE_REQUEST_CHARS
           ? chunkTextBySentence(fullText, MAX_SINGLE_REQUEST_CHARS)
