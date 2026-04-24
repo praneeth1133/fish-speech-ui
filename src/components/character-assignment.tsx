@@ -15,7 +15,7 @@
  * louder than the rest.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useTTSSettingsStore } from "@/lib/tts-settings-store";
 import {
   Dialog,
@@ -28,7 +28,8 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { VoiceAvatar } from "@/components/voice-avatar";
 import { VoicePreviewPlayer } from "@/components/voice-preview-player";
-import { Users, Sparkles, Loader2, X, Check, Volume2, Heart } from "lucide-react";
+import { Users, Sparkles, Loader2, X, Check, Volume2, Heart, Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { motion } from "framer-motion";
 import { useFavoritesStore } from "@/lib/favorites-store";
 
@@ -59,18 +60,33 @@ export function CharacterAssignment() {
   const [voices, setVoices] = useState<BackendVoice[]>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [voiceSearch, setVoiceSearch] = useState("");
   const favoriteIds = useFavoritesStore((s) => s.ids);
 
-  // Sort voices with favorites pinned to the front, then by newest-first
+  // Sort voices with favorites pinned to the front, then by newest-first,
+  // and filter by the voice search query so every voice is discoverable.
   const sortedVoices = useMemo(() => {
     const favSet = new Set(favoriteIds);
-    return [...voices].sort((a, b) => {
+    const q = voiceSearch.trim().toLowerCase();
+    const base = q
+      ? voices.filter((v) => {
+          return (
+            (v.displayName || v.name).toLowerCase().includes(q) ||
+            (v.name || "").toLowerCase().includes(q) ||
+            (v.tagline || "").toLowerCase().includes(q) ||
+            (v.country || "").toLowerCase().includes(q) ||
+            (v.language || "").toLowerCase().includes(q) ||
+            (v.gender || "").toLowerCase().includes(q)
+          );
+        })
+      : voices;
+    return [...base].sort((a, b) => {
       const aFav = favSet.has(a.name) ? 0 : 1;
       const bFav = favSet.has(b.name) ? 0 : 1;
       if (aFav !== bFav) return aFav - bFav;
       return (b.mtime || 0) - (a.mtime || 0);
     });
-  }, [voices, favoriteIds]);
+  }, [voices, favoriteIds, voiceSearch]);
 
   const open = characters !== null;
 
@@ -142,6 +158,32 @@ export function CharacterAssignment() {
 
         {/* Scrollable body */}
         <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-4">
+          {/* Global voice search — filters every character's chip strip */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              value={voiceSearch}
+              onChange={(e) => setVoiceSearch(e.target.value)}
+              placeholder={`Search ${voices.length} voices by name, country, language, gender...`}
+              className="pl-9 h-9 text-sm"
+            />
+            {voiceSearch && (
+              <button
+                type="button"
+                onClick={() => setVoiceSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-1"
+                title="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {voiceSearch && (
+              <p className="text-[11px] text-muted-foreground mt-1">
+                {sortedVoices.length} match{sortedVoices.length === 1 ? "" : "es"}
+              </p>
+            )}
+          </div>
+
           {loadingVoices ? (
             <div className="flex items-center justify-center py-10">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -189,40 +231,40 @@ export function CharacterAssignment() {
                       </div>
                     </div>
 
-                    {/* Horizontally scrollable voice chip strip — strictly
-                        contained so it never widens its parent dialog. */}
-                    <div className="relative w-full">
-                      <div className="flex items-stretch gap-2 overflow-x-auto pb-2 -mx-1 px-1 snap-x snap-mandatory scrollbar-thin">
+                    {/* Horizontally scrollable voice chip strip with explicit
+                        scroll buttons so the full library is discoverable. */}
+                    <ScrollableChipStrip
+                      totalChips={sortedVoices.length + 1}
+                    >
+                      <VoiceChip
+                        selected={assignment.voice_id === null}
+                        onSelect={() => setCharacterVoice(char.name, null, "Default")}
+                        displayName="Default"
+                        tagline="No cloning"
+                        avatarInitials="DF"
+                        voiceId={null}
+                        previewUrl={null}
+                      />
+                      {sortedVoices.map((v) => (
                         <VoiceChip
-                          selected={assignment.voice_id === null}
-                          onSelect={() => setCharacterVoice(char.name, null, "Default")}
-                          displayName="Default"
-                          tagline="No cloning"
-                          avatarInitials="DF"
-                          voiceId={null}
-                          previewUrl={null}
+                          key={v.id}
+                          selected={assignment.voice_id === v.name}
+                          onSelect={() =>
+                            setCharacterVoice(
+                              char.name,
+                              v.name,
+                              v.displayName || v.name
+                            )
+                          }
+                          displayName={v.displayName || v.name}
+                          tagline={v.tagline || v.gender || ""}
+                          avatarInitials={v.avatarInitials || v.name.slice(0, 2).toUpperCase()}
+                          voiceId={v.name}
+                          previewUrl={v.previewUrl || `/api/voice-preview/${v.name}`}
+                          isFavorite={favoriteIds.includes(v.name)}
                         />
-                        {sortedVoices.map((v) => (
-                          <VoiceChip
-                            key={v.id}
-                            selected={assignment.voice_id === v.name}
-                            onSelect={() =>
-                              setCharacterVoice(
-                                char.name,
-                                v.name,
-                                v.displayName || v.name
-                              )
-                            }
-                            displayName={v.displayName || v.name}
-                            tagline={v.tagline || v.gender || ""}
-                            avatarInitials={v.avatarInitials || v.name.slice(0, 2).toUpperCase()}
-                            voiceId={v.name}
-                            previewUrl={v.previewUrl || `/api/voice-preview/${v.name}`}
-                            isFavorite={favoriteIds.includes(v.name)}
-                          />
-                        ))}
-                      </div>
-                    </div>
+                      ))}
+                    </ScrollableChipStrip>
                   </div>
                 );
               })}
@@ -350,5 +392,62 @@ function VoiceChip({
         </div>
       )}
     </motion.button>
+  );
+}
+
+/**
+ * Renders children inside a horizontally-scrollable strip with overlay
+ * arrow buttons so the user can page through all available voices even on
+ * a trackpad that doesn't do horizontal scroll well.
+ */
+function ScrollableChipStrip({
+  children,
+  totalChips,
+}: {
+  children: React.ReactNode;
+  totalChips: number;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const scrollBy = (delta: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: delta, behavior: "smooth" });
+  };
+
+  return (
+    <div className="relative w-full group/strip">
+      <div
+        ref={scrollRef}
+        className="flex items-stretch gap-2 overflow-x-auto pb-2 -mx-1 px-8 scrollbar-thin"
+        style={{ scrollbarWidth: "thin" }}
+      >
+        {children}
+      </div>
+      {/* Left chevron */}
+      <button
+        type="button"
+        onClick={() => scrollBy(-320)}
+        className="absolute left-0 top-1/2 -translate-y-1/2 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-card border border-border shadow-sm opacity-0 group-hover/strip:opacity-100 transition-opacity hover:bg-accent"
+        aria-label="Scroll left"
+      >
+        <ChevronLeft className="h-4 w-4" />
+      </button>
+      {/* Right chevron */}
+      <button
+        type="button"
+        onClick={() => scrollBy(320)}
+        className="absolute right-0 top-1/2 -translate-y-1/2 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-card border border-border shadow-sm opacity-0 group-hover/strip:opacity-100 transition-opacity hover:bg-accent"
+        aria-label="Scroll right"
+      >
+        <ChevronRight className="h-4 w-4" />
+      </button>
+      {/* Total-count hint on the right */}
+      {totalChips > 6 && (
+        <span className="absolute right-1 -bottom-0.5 text-[9px] text-muted-foreground/60 pointer-events-none">
+          {totalChips} voices
+        </span>
+      )}
+    </div>
   );
 }
