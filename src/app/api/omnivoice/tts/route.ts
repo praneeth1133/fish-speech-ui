@@ -196,6 +196,7 @@ export async function POST(request: NextRequest) {
     const decoder = new TextDecoder();
     let buf = "";
     let currentEvent = "";
+    let completionInfo = "";
     outer: while (true) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -213,18 +214,39 @@ export async function POST(request: NextRequest) {
               const data = JSON.parse(dataStr);
               // data is typically [outputArray, infoString]
               const first = Array.isArray(data) ? data[0] : null;
+              const info = Array.isArray(data) && data.length > 1 ? data[1] : null;
               if (first && typeof first === "object") {
                 if (first.url) audioUrl = first.url;
                 else if (first.path) audioUrl = `${SPACE_URL}/gradio_api/file=${first.path}`;
               }
+              if (typeof info === "string") completionInfo = info;
             } catch { /* ignore non-JSON status lines */ }
           }
           if (currentEvent === "complete") break outer;
           if (currentEvent === "error") {
-            return jsonError(502, `OmniVoice error: ${dataStr}`);
+            return jsonError(
+              502,
+              `HF Space rejected this request (free Space on Zero-GPU is often ` +
+                `unavailable/unstable). Try again, switch to Clone mode with ` +
+                `your own reference audio, or point OMNIVOICE_SPACE_URL at ` +
+                `your own HF Inference Endpoint. Raw: ${dataStr}`
+            );
           }
         }
       }
+    }
+
+    // OmniVoice occasionally completes with null audio + an info string like
+    // "Error: ValueError: ...". Surface that message rather than "null".
+    if (!audioUrl && completionInfo) {
+      const hint =
+        completionInfo.toLowerCase().includes("error") ||
+        completionInfo.toLowerCase().includes("valueerror")
+          ? "The free HF Space is currently failing. Try again in a moment, " +
+            "switch to Clone mode with your own reference audio, or deploy " +
+            "your own HF Inference Endpoint and set OMNIVOICE_SPACE_URL."
+          : "";
+      return jsonError(502, `${completionInfo}${hint ? " — " + hint : ""}`);
     }
   } catch (err) {
     return jsonError(504, `OmniVoice polling error: ${String(err)}`);
