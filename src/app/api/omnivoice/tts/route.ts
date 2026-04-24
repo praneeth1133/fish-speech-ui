@@ -86,11 +86,15 @@ export async function POST(request: NextRequest) {
   if (!rawText) return jsonError(400, "'text' is required");
   if (rawText.length > 5000) return jsonError(400, "text too long (max 5000 chars)");
 
-  // Strip expression tags so OmniVoice doesn't speak them literally. Emotion
-  // tags get merged into the instruct prompt so the model tries to voice them.
+  // Strip expression tags so OmniVoice doesn't speak them literally.
   // Pause tags are converted to punctuation (commas / periods / em-dashes)
   // which the model naturally reads as short / medium / long pauses.
-  const { cleanText, emotionHint } = parseExpressions(rawText);
+  // Emotion tags ([EXCITED], [SAD], etc.) are SILENTLY DROPPED rather than
+  // rewritten into the `instruct` field — OmniVoice's _clone_fn validates
+  // instruct against a strict attribute vocabulary (gender / age / pitch /
+  // accent / style keywords), so any free-form "Voice it excited…" phrase
+  // trips "ValueError: Unsupported instruct items".
+  const { cleanText } = parseExpressions(rawText);
 
   const language = (body.language as string) || "Auto";
   let mode = (body.mode as string) || "clone"; // "clone" or "design"
@@ -207,11 +211,10 @@ export async function POST(request: NextRequest) {
       }
     : null;
 
-  // Merge emotion hints into the instruct prompt when in design mode — the
-  // model can pick them up as tone direction.
-  const instructFinal = emotionHint
-    ? instruct ? `${instruct}. ${emotionHint}` : emotionHint
-    : instruct;
+  // Only pass the user-supplied instruct through. OmniVoice expects this
+  // field to use its controlled vocabulary (e.g. "male, elderly, high pitch"),
+  // so we trust whatever the caller put there and never append our own text.
+  const instructFinal = instruct;
 
   // OmniVoice exposes two Gradio functions:
   //   fn_index 0 = _clone_fn   — used when ref_audio is provided
@@ -541,55 +544,35 @@ function clampFloat(v: unknown, min: number, max: number, def: number): number {
 
 /**
  * Parse Fish-Speech-style expression tags from user text.
- * - Pause tags become punctuation so the model naturally pauses.
- * - Emotion tags become an instruct-prompt suffix ("Voice it excitedly").
+ *
+ * OmniVoice does not support free-form emotion direction — its `instruct`
+ * field expects a comma-separated list of attribute keywords from a strict
+ * vocabulary (gender / age / pitch / accent / style). Any sentence like
+ * "Voice it excited and energetic." trips
+ *   ValueError: Unsupported instruct items found in '…'
+ *
+ * So here we only translate pause tags into real punctuation and strip
+ * every other bracketed tag entirely. Emotion cues carry through via the
+ * reference audio for clone mode, or via the attribute dropdowns for design
+ * mode — never via instruct.
  */
-function parseExpressions(text: string): { cleanText: string; emotionHint: string } {
-  const emotions: string[] = [];
-
-  // Pause tags → punctuation
+function parseExpressions(text: string): { cleanText: string } {
+  // Pause tags → punctuation (OmniVoice reads these as real pauses)
   let s = text
     .replace(/\[\s*LONG\s+PAUSE\s*\]/gi, " — ")
     .replace(/\[\s*MEDIUM\s+PAUSE\s*\]/gi, ". ")
     .replace(/\[\s*SHORT\s+PAUSE\s*\]/gi, ", ");
 
-  // Emotion tags → strip + collect
-  const EMOTIONS: Record<string, string> = {
-    EXCITED: "excited and energetic",
-    CALM: "calm and measured",
-    SAD: "sad and soft",
-    ANGRY: "angry and forceful",
-    ANGER: "angry and forceful",
-    WHISPERING: "whispering quietly",
-    WHISPER: "whispering quietly",
-    SUSPENSE: "tense and suspenseful",
-    SUSPENSEFUL: "tense and suspenseful",
-    POSITIVE: "warm and positive",
-    HAPPY: "happy and cheerful",
-    CHEERFUL: "happy and cheerful",
-    FEARFUL: "fearful and hesitant",
-    SARCASTIC: "sarcastic and dry",
-    SHOUT: "shouting",
-    SHOUTING: "shouting",
-  };
+  // Any other bracketed token (emotion tags, stage directions, lowercased
+  // "[giggles]", etc.) — drop it silently. Leaving them in would make the
+  // model try to pronounce words like "EXCITED" inside the audio.
+  s = s.replace(/\[[^\]]+\]/g, " ");
 
-  s = s.replace(/\[([^\]]+)\]/g, (_, raw: string) => {
-    const key = raw.trim().toUpperCase().replace(/\s+/g, "");
-    const mapped = EMOTIONS[key] || EMOTIONS[raw.trim().toUpperCase()];
-    if (mapped) {
-      emotions.push(mapped);
-      return " ";
-    }
-    // Unknown tag — strip it rather than let it be spoken literally
-    return " ";
-  });
+  // Collapse whitespace and tidy up spaces before punctuation
+  const cleanText = s
+    .replace(/\s+/g, " ")
+    .replace(/\s+([.,!?—])/g, "$1")
+    .trim();
 
-  // Collapse whitespace
-  const cleanText = s.replace(/\s+/g, " ").replace(/\s+([.,!?—])/g, "$1").trim();
-
-  const emotionHint = emotions.length
-    ? `Voice it ${Array.from(new Set(emotions)).join(", then ")}.`
-    : "";
-
-  return { cleanText, emotionHint };
+  return { cleanText };
 }

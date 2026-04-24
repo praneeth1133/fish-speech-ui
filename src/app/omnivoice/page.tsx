@@ -673,7 +673,7 @@ export default function OmniVoicePage() {
               placeholder={
                 mode === "characters"
                   ? 'Paste a dialogue or script. Example:\n\nAlice: Did you hear that?\nBob: Yeah. We should probably leave.\nNarrator: The wind picked up.'
-                  : "Type anything in any of 600+ languages. Use [EXCITED], [CALM], [LONG PAUSE] etc. for expression."
+                  : "Type anything in any of 600+ languages. [SHORT PAUSE] / [MEDIUM PAUSE] / [LONG PAUSE] become real silences; emotion tags like [EXCITED] are stripped (not supported by OmniVoice)."
               }
               className="min-h-[120px] resize-y"
             />
