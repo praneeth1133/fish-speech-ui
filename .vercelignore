@@ -1,0 +1,6 @@
+.next
+node_modules
+scripts
+*.parquet
+.env.local
+.env*.local

@@ -15,10 +15,12 @@ import {
   AlertCircle,
   ListOrdered,
   Download,
+  Copy,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useState, useEffect } from "react";
 import { getVoiceDisplayInfo } from "@/lib/voice-names";
+import { makeDownloadName } from "@/lib/download-name";
 
 function formatClock(seconds: number): string {
   const mins = Math.floor(seconds / 60);
@@ -133,7 +135,11 @@ function CompletedJobAudio({ job }: { job: QueueJob }) {
         onClick={() => {
           const a = document.createElement("a");
           a.href = url;
-          a.download = `fish-speech-${job.id.slice(0, 8)}.${job.format}`;
+          a.download = makeDownloadName(
+            job.text,
+            job.format,
+            job.completed_at || undefined
+          );
           a.click();
         }}
       >
@@ -142,6 +148,15 @@ function CompletedJobAudio({ job }: { job: QueueJob }) {
       </Button>
     </div>
   );
+}
+
+async function copyJobText(job: QueueJob) {
+  try {
+    await navigator.clipboard.writeText(job.text);
+    toast.success("Text copied to clipboard");
+  } catch {
+    toast.error("Couldn't copy — browser blocked clipboard access");
+  }
 }
 
 function JobItem({
@@ -205,6 +220,15 @@ function JobItem({
 
       {/* Actions */}
       <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+          onClick={() => copyJobText(job)}
+          title="Copy text"
+        >
+          <Copy className="h-3.5 w-3.5" />
+        </Button>
         {job.status === "failed" && onRetry && (
           <Button
             variant="ghost"

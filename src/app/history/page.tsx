@@ -4,9 +4,10 @@ import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { AudioPlayer } from "@/components/audio-player";
 import { Badge } from "@/components/ui/badge";
-import { Clock, Trash2, Download } from "lucide-react";
+import { Clock, Trash2, Download, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { listHistory, deleteHistoryItem, type HistoryItem } from "@/lib/idb";
+import { makeDownloadName } from "@/lib/download-name";
 
 interface HistoryRow extends HistoryItem {
   url: string;
@@ -60,8 +61,17 @@ export default function HistoryPage() {
   const handleDownload = (row: HistoryRow) => {
     const a = document.createElement("a");
     a.href = row.url;
-    a.download = `fish-speech-${row.id.slice(0, 8)}.${row.format}`;
+    a.download = makeDownloadName(row.text, row.format, row.created_at);
     a.click();
+  };
+
+  const handleCopyText = async (row: HistoryRow) => {
+    try {
+      await navigator.clipboard.writeText(row.text);
+      toast.success("Text copied to clipboard");
+    } catch {
+      toast.error("Couldn't copy — your browser blocked clipboard access");
+    }
   };
 
   return (
@@ -104,6 +114,15 @@ export default function HistoryPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      title="Copy text"
+                      onClick={() => handleCopyText(row)}
+                    >
+                      <Copy className="h-4 w-4" />
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"

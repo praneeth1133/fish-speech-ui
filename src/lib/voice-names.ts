@@ -14,7 +14,9 @@ export interface VoiceNameInfo {
   /** Exact age if known (from dataset), otherwise null */
   age: number | null;
   /** Source dataset so we can show attribution (VCTK voices need CC-BY credit) */
-  source?: "fish-speech-builtin" | "vctk";
+  source?: "fish-speech-builtin" | "vctk" | "indic-parler";
+  /** Which TTS engine this voice is bound to. Absent = Fish-Speech (default). */
+  engine?: "fish-speech" | "indic-parler";
 }
 
 export const LANGUAGE_COLORS: Record<string, { bg: string; text: string; glow: string; ring: string }> = {
@@ -223,6 +225,35 @@ export const VOICE_NAME_MAP: Record<string, VoiceNameInfo> = {
   "el-haven-ice":       { displayName: "Haven Ice",    language: "English", gender: "male",   languageCode: "en", avatarInitials: "HI", tagline: "Clear, positive, engaging",      country: "United States",    countryCode: "us", ageBucket: "young", age: null, source: "fish-speech-builtin" },
   "el-saanu":           { displayName: "Saanu",        language: "English", gender: "female", languageCode: "en", avatarInitials: "SA", tagline: "Soft, muffled, calm",            country: "International",    countryCode: "xx", ageBucket: "adult", age: null, source: "fish-speech-builtin" },
   "el-cherry-twinkle":  { displayName: "Cherry Twinkle",language:"English", gender: "female", languageCode: "en", avatarInitials: "CT", tagline: "Bubbly and sweet",               country: "United States",    countryCode: "us", ageBucket: "young", age: null, source: "fish-speech-builtin" },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Indic Parler-TTS — Telugu voices (22)
+  // Engine: ai4bharat/indic-parler-tts (Apache-2.0). Native Telugu speakers
+  // Prakash/Lalitha/Kiran cover the first 20 profiles with emotion variation
+  // via description; the last 2 are cross-lingual speakers for character color.
+  // ─────────────────────────────────────────────────────────────────────────
+  "te-prakash-narrator-calm":  { displayName: "Arjun (Narrator)",       language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "AR", tagline: "Calm audiobook narrator",      country: "India", countryCode: "in", ageBucket: "adult", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-prakash-dramatic":       { displayName: "Vikram (Dramatic)",      language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "VK", tagline: "Dramatic storyteller",         country: "India", countryCode: "in", ageBucket: "adult", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-prakash-news-anchor":    { displayName: "Ravi (News)",            language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "RV", tagline: "Authoritative news anchor",    country: "India", countryCode: "in", ageBucket: "adult", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-prakash-elder-sage":     { displayName: "Raghavayya (Elder)",     language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "RG", tagline: "Wise grandfather",             country: "India", countryCode: "in", ageBucket: "older", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-prakash-villain":        { displayName: "Ravana (Villain)",       language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "RN", tagline: "Sinister antagonist",          country: "India", countryCode: "in", ageBucket: "adult", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-prakash-comedic":        { displayName: "Brahmi (Comic)",         language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "BR", tagline: "Energetic comic",              country: "India", countryCode: "in", ageBucket: "adult", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-prakash-romantic":       { displayName: "Pradeep (Romantic)",     language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "PR", tagline: "Warm romantic lead",           country: "India", countryCode: "in", ageBucket: "young", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-prakash-young-hero":     { displayName: "Surya (Hero)",           language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "SU", tagline: "Energetic protagonist",        country: "India", countryCode: "in", ageBucket: "young", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-lalitha-narrator-calm":  { displayName: "Lakshmi (Narrator)",     language: "Telugu", gender: "female", languageCode: "te", avatarInitials: "LK", tagline: "Graceful narrator",            country: "India", countryCode: "in", ageBucket: "adult", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-lalitha-news-anchor":    { displayName: "Priya (News)",           language: "Telugu", gender: "female", languageCode: "te", avatarInitials: "PY", tagline: "Professional news anchor",     country: "India", countryCode: "in", ageBucket: "adult", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-lalitha-warm-mother":    { displayName: "Amma (Mother)",          language: "Telugu", gender: "female", languageCode: "te", avatarInitials: "AM", tagline: "Warm maternal voice",          country: "India", countryCode: "in", ageBucket: "older", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-lalitha-young-heroine":  { displayName: "Swathi (Heroine)",       language: "Telugu", gender: "female", languageCode: "te", avatarInitials: "SW", tagline: "Youthful heroine",             country: "India", countryCode: "in", ageBucket: "young", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-lalitha-romantic":       { displayName: "Madhuri (Romantic)",     language: "Telugu", gender: "female", languageCode: "te", avatarInitials: "MD", tagline: "Soft romantic",                country: "India", countryCode: "in", ageBucket: "young", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-lalitha-dramatic":       { displayName: "Sita (Dramatic)",        language: "Telugu", gender: "female", languageCode: "te", avatarInitials: "SI", tagline: "Dramatic heroine",             country: "India", countryCode: "in", ageBucket: "adult", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-lalitha-elder-grandma":  { displayName: "Ammamma (Grandma)",      language: "Telugu", gender: "female", languageCode: "te", avatarInitials: "AG", tagline: "Wise grandmother",             country: "India", countryCode: "in", ageBucket: "older", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-lalitha-comic":          { displayName: "Jamuna (Comic)",         language: "Telugu", gender: "female", languageCode: "te", avatarInitials: "JM", tagline: "Animated comic",               country: "India", countryCode: "in", ageBucket: "adult", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-kiran-narrator":         { displayName: "Karthik (Narrator)",     language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "KR", tagline: "Youthful narrator",            country: "India", countryCode: "in", ageBucket: "young", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-kiran-child-boy":        { displayName: "Chinnu (Boy)",           language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "CH", tagline: "Young boy character",          country: "India", countryCode: "in", ageBucket: "kid", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-kiran-journalist":       { displayName: "Ramesh (Reporter)",      language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "RM", tagline: "On-scene reporter",            country: "India", countryCode: "in", ageBucket: "young", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-kiran-softspoken":       { displayName: "Teja (Softspoken)",      language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "TJ", tagline: "Soft, gentle young man",       country: "India", countryCode: "in", ageBucket: "young", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-xling-deep-male":        { displayName: "Rudra (Deep Voice)",     language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "RD", tagline: "Deep villain alternate",       country: "India", countryCode: "in", ageBucket: "adult", age: null, source: "indic-parler", engine: "indic-parler" },
+  "te-xling-gravitas-elder":   { displayName: "Maharshi (Sage)",        language: "Telugu", gender: "male",   languageCode: "te", avatarInitials: "MH", tagline: "Ancient sage alt",             country: "India", countryCode: "in", ageBucket: "older", age: null, source: "indic-parler", engine: "indic-parler" },
 };
 
 export function getVoiceDisplayInfo(voiceId: string): VoiceNameInfo | null {
@@ -234,6 +265,8 @@ export function getLanguageFromId(voiceId: string): string {
   const cleanId = voiceId.replace(/^ref:/, "");
   // VCTK ids look like "vctk-{cc}-{gender}-{age}-{speaker}" — those are all English
   if (cleanId.startsWith("vctk-")) return "english";
+  // Indic Parler-TTS Telugu ids are prefixed with "te-"
+  if (cleanId.startsWith("te-")) return "telugu";
   const parts = cleanId.split("-");
   return parts[0] || "other";
 }

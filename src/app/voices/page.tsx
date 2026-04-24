@@ -33,6 +33,7 @@ import {
   Sparkles,
   Clock,
   Flame,
+  Languages,
 } from "lucide-react";
 import { toast } from "sonner";
 import { LANGUAGES, COUNTRIES, AGE_BUCKETS, VOICE_NAME_MAP } from "@/lib/voice-names";
@@ -83,6 +84,16 @@ export default function VoicesPage() {
   const [uploadDescription, setUploadDescription] = useState("");
   const [uploadText, setUploadText] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+
+  // Telugu (Indic Parler-TTS) voice-creation dialog state.  Parler-TTS doesn't
+  // clone audio — instead we pick a built-in speaker ID and describe the
+  // voice in natural language, which the model conditions on.
+  const [isTeluguOpen, setIsTeluguOpen] = useState(false);
+  const [teluguName, setTeluguName] = useState("");
+  const [teluguSpeaker, setTeluguSpeaker] = useState<string>("Prakash");
+  const [teluguDescription, setTeluguDescription] = useState<string>("");
+  const [teluguGender, setTeluguGender] = useState<"male" | "female">("male");
+  const [teluguAge, setTeluguAge] = useState<"kid" | "young" | "adult" | "older">("adult");
 
   const [isCreating, setIsCreating] = useState(false);
   const [search, setSearch] = useState("");
@@ -187,6 +198,114 @@ export default function VoicesPage() {
       setRecordName("");
       setRecordDescription("");
       setRecording({ wavBlob: null, referenceText: "", durationSeconds: 0 });
+    }
+  };
+
+  // Speaker catalogue exposed in the Telugu dialog. Native Telugu speakers
+  // (Prakash / Lalitha / Kiran) are at the top and flagged Recommended; the
+  // two cross-lingual options cover deep/elder character voices.
+  const TELUGU_SPEAKERS: Array<{
+    id: string;
+    label: string;
+    recommended: boolean;
+    defaultGender: "male" | "female";
+    defaultAge: "kid" | "young" | "adult" | "older";
+    defaultDescription: string;
+  }> = [
+    {
+      id: "Prakash",
+      label: "Prakash — native Telugu, male adult",
+      recommended: true,
+      defaultGender: "male",
+      defaultAge: "adult",
+      defaultDescription:
+        "Prakash speaks clearly at a moderate pace, with a close studio recording and no background noise.",
+    },
+    {
+      id: "Lalitha",
+      label: "Lalitha — native Telugu, female adult",
+      recommended: true,
+      defaultGender: "female",
+      defaultAge: "adult",
+      defaultDescription:
+        "Lalitha speaks in a graceful, clear, and measured voice, with close studio quality.",
+    },
+    {
+      id: "Kiran",
+      label: "Kiran — native Telugu, male young",
+      recommended: true,
+      defaultGender: "male",
+      defaultAge: "young",
+      defaultDescription:
+        "Kiran speaks clearly and evenly at moderate pace, youthful and neutral, clean studio recording.",
+    },
+    {
+      id: "Jaideep",
+      label: "Jaideep — cross-lingual, deep male",
+      recommended: false,
+      defaultGender: "male",
+      defaultAge: "adult",
+      defaultDescription:
+        "The speaker has a very deep, resonant, gritty voice, speaking slowly and menacingly.",
+    },
+    {
+      id: "Rahul",
+      label: "Rahul — cross-lingual, gravitas elder",
+      recommended: false,
+      defaultGender: "male",
+      defaultAge: "older",
+      defaultDescription:
+        "The speaker has a deep, weighty, slightly rough voice, speaking very slowly with gravitas.",
+    },
+  ];
+
+  const handleTeluguSpeakerChange = (speakerId: string) => {
+    setTeluguSpeaker(speakerId);
+    const match = TELUGU_SPEAKERS.find((s) => s.id === speakerId);
+    if (match) {
+      // Only auto-fill description if the user hasn't started typing their own.
+      if (!teluguDescription.trim() ||
+          TELUGU_SPEAKERS.some((s) => s.defaultDescription === teluguDescription)) {
+        setTeluguDescription(match.defaultDescription);
+      }
+      setTeluguGender(match.defaultGender);
+      setTeluguAge(match.defaultAge);
+    }
+  };
+
+  const handleTeluguCreate = async () => {
+    if (!teluguName.trim() || !teluguDescription.trim()) return;
+    setIsCreating(true);
+    try {
+      const formData = new FormData();
+      formData.append("name", teluguName.trim());
+      formData.append("engine", "indic-parler");
+      formData.append("speaker_id", teluguSpeaker);
+      formData.append("description", teluguDescription.trim());
+      formData.append("language", "telugu");
+      formData.append("gender", teluguGender);
+      formData.append("age_bucket", teluguAge);
+      const res = await fetch("/api/voices", { method: "POST", body: formData });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: "Failed" }));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      toast.success("Telugu voice created", {
+        description: `"${teluguName.trim()}" is ready. Click play to generate a preview.`,
+      });
+      await fetchVoices();
+      setIsTeluguOpen(false);
+      setTeluguName("");
+      setTeluguSpeaker("Prakash");
+      setTeluguDescription("");
+      setTeluguGender("male");
+      setTeluguAge("adult");
+    } catch (err) {
+      toast.error("Failed to create Telugu voice", {
+        description: err instanceof Error ? err.message : "Unknown error",
+      });
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -403,6 +522,119 @@ export default function VoicesPage() {
                     Upload audio + add reference text to enable Save
                   </p>
                 )}
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Create Telugu Voice dialog (Indic Parler-TTS — no audio cloning) */}
+          <Dialog
+            open={isTeluguOpen}
+            onOpenChange={(next) => {
+              setIsTeluguOpen(next);
+              if (!next) {
+                setTeluguName("");
+                setTeluguSpeaker("Prakash");
+                setTeluguDescription("");
+                setTeluguGender("male");
+                setTeluguAge("adult");
+              } else if (!teluguDescription) {
+                // First open — prefill description from the default speaker.
+                const defaultSpeaker = TELUGU_SPEAKERS.find((s) => s.id === "Prakash");
+                if (defaultSpeaker) setTeluguDescription(defaultSpeaker.defaultDescription);
+              }
+            }}
+          >
+            <DialogTrigger render={<Button variant="outline" className="gap-2" />}>
+              <Languages className="h-4 w-4" />
+              Telugu Voice
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Create Telugu Voice</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 pt-4">
+                <p className="text-xs text-muted-foreground">
+                  Telugu uses AI4Bharat&apos;s Indic Parler-TTS — it doesn&apos;t clone audio.
+                  Pick a built-in speaker and describe the delivery (pace, emotion, tone).
+                </p>
+
+                <div className="space-y-2">
+                  <Label>Voice Name</Label>
+                  <Input
+                    placeholder="e.g. Arjun (Narrator)"
+                    value={teluguName}
+                    onChange={(e) => setTeluguName(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Speaker</Label>
+                  <select
+                    value={teluguSpeaker}
+                    onChange={(e) => handleTeluguSpeakerChange(e.target.value)}
+                    className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm"
+                  >
+                    {TELUGU_SPEAKERS.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label}{s.recommended ? " · Recommended" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>
+                    Voice Description{" "}
+                    <span className="text-muted-foreground font-normal">
+                      — pacing, emotion, recording quality
+                    </span>
+                  </Label>
+                  <Textarea
+                    placeholder="e.g. Prakash speaks calmly and clearly at a moderate pace, with close studio recording."
+                    value={teluguDescription}
+                    onChange={(e) => setTeluguDescription(e.target.value)}
+                    className="min-h-[100px]"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label>Gender</Label>
+                    <select
+                      value={teluguGender}
+                      onChange={(e) => setTeluguGender(e.target.value as "male" | "female")}
+                      className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm"
+                    >
+                      <option value="male">Male</option>
+                      <option value="female">Female</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Age</Label>
+                    <select
+                      value={teluguAge}
+                      onChange={(e) => setTeluguAge(e.target.value as typeof teluguAge)}
+                      className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm"
+                    >
+                      <option value="kid">Kid</option>
+                      <option value="young">Young</option>
+                      <option value="adult">Adult</option>
+                      <option value="older">Older</option>
+                    </select>
+                  </div>
+                </div>
+
+                <Button
+                  onClick={handleTeluguCreate}
+                  disabled={!teluguName.trim() || !teluguDescription.trim() || isCreating}
+                  className="w-full"
+                  size="lg"
+                >
+                  {isCreating ? "Saving voice…" : "Save Telugu Voice"}
+                </Button>
+                <p className="text-[11px] text-muted-foreground text-center -mt-2">
+                  Preview will be generated the first time you play it (~30s on first load).
+                </p>
               </div>
             </DialogContent>
           </Dialog>

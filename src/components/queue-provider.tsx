@@ -8,6 +8,7 @@ import {
   getHistoryItem,
 } from "@/lib/idb";
 import { concatAudioBlobs } from "@/lib/wav-concat";
+import { makeDownloadName } from "@/lib/download-name";
 import { toast } from "sonner";
 
 /**
@@ -67,7 +68,7 @@ export function QueueProvider() {
                   if (!url) return;
                   const a = document.createElement("a");
                   a.href = url;
-                  a.download = `fish-speech-${job.id.slice(0, 8)}.${job.format}`;
+                  a.download = makeDownloadName(job.text, job.format, job.completed_at || undefined);
                   a.click();
                   setTimeout(() => URL.revokeObjectURL(url), 60_000);
                 },

@@ -61,8 +61,12 @@ export async function GET(
     // Fall through to TTS generation below.
   }
 
-  // On-demand TTS fallback (only used if no static sample exists)
-  const previewText = "Hello, this is a voice preview. Nice to meet you!";
+  // On-demand TTS fallback (only used if no static sample exists).
+  // Telugu voices (te-*) route to Indic Parler-TTS which expects Telugu
+  // script; generating an English preview on those would produce garbage.
+  const previewText = refId.startsWith("te-")
+    ? "నమస్కారం, ఇది ఒక స్వర నమూనా. మిమ్మల్ని కలవడం సంతోషం!"
+    : "Hello, this is a voice preview. Nice to meet you!";
 
   try {
     const upstream = await backendFetch("/v1/tts", {

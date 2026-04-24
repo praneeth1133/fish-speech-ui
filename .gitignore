@@ -49,3 +49,5 @@ next-env.d.ts
 /scripts/vctk-work/shard*.parquet
 /scripts/vctk-work/voices/
 /scripts/vctk-work/manifest.urls
+
+.vercel

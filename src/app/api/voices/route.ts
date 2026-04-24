@@ -71,8 +71,17 @@ export async function GET() {
 }
 
 /**
- * POST — register a custom reference voice with the Fish Speech backend by
- * forwarding the multipart upload. No local storage.
+ * POST — register a custom reference voice.
+ *
+ * Two flavours:
+ *   - Fish-Speech (default): multipart with { name, audio, reference_text }.
+ *     Forwarded to /v1/references/add (audio cloning).
+ *   - Indic Parler-TTS (Telugu): multipart with
+ *     { name, engine: "indic-parler", speaker_id, description, language }.
+ *     Forwarded as JSON to /v1/references/add-profile (description-based,
+ *     no audio upload).
+ *
+ * Branch picked by the `engine` form field; absent = Fish-Speech.
  */
 export async function POST(request: Request) {
   let inForm: FormData;
@@ -83,20 +92,74 @@ export async function POST(request: Request) {
   }
 
   const name = (inForm.get("name") as string | null)?.trim();
-  const referenceText = (inForm.get("reference_text") as string | null)?.trim() || "";
-  const audioFile = inForm.get("audio") as File | null;
-
   if (!name) {
     return Response.json({ error: "Name is required" }, { status: 400 });
   }
+  const refId = name.toLowerCase().replace(/[^a-z0-9-_]/g, "-");
+  const engine = (inForm.get("engine") as string | null)?.trim() || "fish-speech";
+
+  if (engine === "indic-parler") {
+    const speakerId = (inForm.get("speaker_id") as string | null)?.trim() || "";
+    const description = (inForm.get("description") as string | null)?.trim() || "";
+    const language = (inForm.get("language") as string | null)?.trim() || "telugu";
+    const displayName = (inForm.get("description") as string | null)?.trim() || name;
+    const gender = (inForm.get("gender") as string | null)?.trim() || "";
+    const ageBucket = (inForm.get("age_bucket") as string | null)?.trim() || "adult";
+
+    if (!speakerId || !description) {
+      return Response.json(
+        { error: "speaker_id and description are required for Indic Parler-TTS" },
+        { status: 400 }
+      );
+    }
+
+    try {
+      const res = await backendFetch("/v1/references/add-profile", {
+        method: "POST",
+        body: JSON.stringify({
+          id: refId,
+          engine: "indic-parler",
+          speaker_id: speakerId,
+          description,
+          display_name: displayName,
+          gender,
+          language,
+          age_bucket: ageBucket,
+        }),
+        timeoutMs: 15_000,
+      });
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => "");
+        return Response.json(
+          { error: errorText || `Backend returned ${res.status}` },
+          { status: res.status }
+        );
+      }
+      return Response.json({
+        id: refId,
+        reference_id: refId,
+        name,
+        engine: "indic-parler",
+      });
+    } catch (err) {
+      console.error("Telugu profile creation error:", err);
+      return Response.json(
+        { error: err instanceof Error ? err.message : "Failed to create voice" },
+        { status: 502 }
+      );
+    }
+  }
+
+  // Fish-Speech path (default) — audio upload + reference text.
+  const referenceText = (inForm.get("reference_text") as string | null)?.trim() || "";
+  const audioFile = inForm.get("audio") as File | null;
+
   if (!audioFile || !referenceText) {
     return Response.json(
       { error: "Audio file and reference text are required" },
       { status: 400 }
     );
   }
-
-  const refId = name.toLowerCase().replace(/[^a-z0-9-_]/g, "-");
 
   // Re-build the multipart payload with the field names the Fish Speech API expects.
   const outForm = new FormData();
