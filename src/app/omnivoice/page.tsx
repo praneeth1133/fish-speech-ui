@@ -116,8 +116,11 @@ export default function OmniVoicePage() {
   const [segments, setSegments] = useState<ScriptSegment[] | null>(null);
   const [assignments, setAssignments] = useState<CharacterAssignments>({});
   const [identifying, setIdentifying] = useState(false);
-  const [multiProgress, setMultiProgress] = useState<{ done: number; total: number } | null>(null);
+  const [multiProgress, setMultiProgress] = useState<
+    { done: number; total: number; phase: "generating" | "merging" } | null
+  >(null);
   const [multiErrors, setMultiErrors] = useState<string[]>([]);
+  const resultRef = useRef<HTMLDivElement>(null);
 
   // Expression-generation state (AI-annotates text with [EXCITED] etc.)
   const [annotating, setAnnotating] = useState(false);
@@ -346,7 +349,7 @@ export default function OmniVoicePage() {
     setIsGenerating(true);
     setResultUrl(null);
     setMultiErrors([]);
-    setMultiProgress({ done: 0, total: segments.length });
+    setMultiProgress({ done: 0, total: segments.length, phase: "generating" });
 
     const errors: string[] = [];
     const blobs: Blob[] = [];
@@ -357,7 +360,7 @@ export default function OmniVoicePage() {
         const preset = assignments[seg.character];
         if (!preset) {
           errors.push(`Missing voice for ${seg.character}`);
-          setMultiProgress({ done: i + 1, total: segments.length });
+          setMultiProgress({ done: i + 1, total: segments.length, phase: "generating" });
           continue;
         }
         try {
@@ -386,20 +389,44 @@ export default function OmniVoicePage() {
           recordGeneration();
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          console.error(`Segment ${i + 1} (${seg.character}) failed:`, err);
           errors.push(`Segment ${i + 1} (${seg.character}): ${msg}`);
         }
-        setMultiProgress({ done: i + 1, total: segments.length });
+        setMultiProgress({ done: i + 1, total: segments.length, phase: "generating" });
       }
 
       if (blobs.length === 0) {
-        throw new Error("Every segment failed — no audio to merge");
+        throw new Error(
+          `Every one of ${segments.length} segments failed to generate. ` +
+            `Check the browser console for details.`
+        );
       }
 
-      const merged = await concatAudioBlobs(blobs, {
-        gapSeconds: 0.3,
-        normalizeVolume: true,
-        targetRms: 0.1,
+      // Merge step — WAV decode/resample/normalize/concat. This can take a
+      // couple of seconds for a 17-segment batch. Flip phase so the UI shows
+      // "Merging audio…" instead of a frozen "17/17" counter.
+      setMultiProgress({
+        done: blobs.length,
+        total: segments.length,
+        phase: "merging",
       });
+
+      let merged: Blob;
+      try {
+        merged = await concatAudioBlobs(blobs, {
+          gapSeconds: 0.3,
+          normalizeVolume: true,
+          targetRms: 0.1,
+        });
+      } catch (mergeErr) {
+        console.error("Merge failed:", mergeErr);
+        throw new Error(
+          `Generated ${blobs.length} clips but merging them failed: ${
+            mergeErr instanceof Error ? mergeErr.message : String(mergeErr)
+          }`
+        );
+      }
+
       const url = URL.createObjectURL(merged);
       setResultUrl(url);
       const fullText = segments.map((s) => s.text).join(" ");
@@ -407,14 +434,21 @@ export default function OmniVoicePage() {
       setResultFilename(makeDownloadName(fullText, "wav"));
       setMultiErrors(errors);
       if (errors.length === 0) {
-        toast.success(`Merged ${blobs.length} segments`);
+        toast.success(`Multi-voice audio ready`, {
+          description: `${blobs.length} segments combined into one file`,
+        });
       } else {
         toast.warning(
-          `Merged ${blobs.length} segments (${errors.length} failed — see details)`
+          `Merged ${blobs.length} segments · ${errors.length} failed — see details`
         );
       }
+      // Scroll the result player into view so the user doesn't miss it when
+      // the progress text disappears.
+      requestAnimationFrame(() => {
+        resultRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
     } catch (err) {
-      console.error(err);
+      console.error("Multi-voice generation error:", err);
       toast.error(err instanceof Error ? err.message : "Multi-voice generation failed");
       setMultiErrors((prev) => [
         ...prev,
@@ -422,6 +456,9 @@ export default function OmniVoicePage() {
       ]);
     } finally {
       setIsGenerating(false);
+      // Always clear the in-progress counter — even on error — so the UI
+      // doesn't get stuck showing "Generating segment N / N" forever.
+      setMultiProgress(null);
     }
   };
 
@@ -728,7 +765,9 @@ export default function OmniVoicePage() {
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
                   {multiProgress
-                    ? `Generating ${multiProgress.done} / ${multiProgress.total}…`
+                    ? multiProgress.phase === "merging"
+                      ? "Merging audio…"
+                      : `Generating ${multiProgress.done} / ${multiProgress.total}…`
                     : "Generating…"}
                 </>
               ) : (
@@ -745,6 +784,7 @@ export default function OmniVoicePage() {
           {/* Result player */}
           {resultUrl && (
             <motion.div
+              ref={resultRef}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               className="rounded-lg border border-border bg-card p-4 space-y-3"
@@ -1032,7 +1072,9 @@ function CharacterPanel({
           {multiProgress && (
             <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground flex items-center gap-2">
               <Loader2 className="h-3 w-3 animate-spin" />
-              Generating segment {multiProgress.done} / {multiProgress.total}
+              {multiProgress.phase === "merging"
+                ? `Merging ${multiProgress.done} audio clips into one file…`
+                : `Generating segment ${multiProgress.done} / ${multiProgress.total}`}
               {multiErrors.length > 0 &&
                 ` · ${multiErrors.length} failed so far`}
             </div>
