@@ -125,51 +125,47 @@ export async function POST(request: NextRequest) {
     ? instruct ? `${instruct}. ${emotionHint}` : emotionHint
     : instruct;
 
-  // OmniVoice has TWO separate endpoints depending on mode:
-  //   _clone_fn   — used when ref_audio is provided
-  //   _design_fn  — used when describing via attribute dropdowns
+  // OmniVoice exposes two Gradio functions:
+  //   fn_index 0 = _clone_fn   — used when ref_audio is provided
+  //   fn_index 1 = _design_fn  — used when describing via attribute dropdowns
   const useClone = mode === "clone";
-  const endpoint = useClone ? "_clone_fn" : "_design_fn";
+  const fnIndex: 0 | 1 = useClone ? 0 : 1;
 
   // Duration as number ("" in Gradio = null/auto)
   const durationArg = duration >= 0 ? duration : null;
 
-  const payload = useClone
-    ? {
-        data: [
-          cleanText,      // [0] text
-          language,       // [1] language
-          refAudioArg,    // [2] ref_audio (FileData | null)
-          refText,        // [3] ref_text
-          instructFinal,  // [4] instruct
-          numStep,        // [5] inference steps
-          guidanceScale,  // [6] guidance scale
-          denoise,        // [7] denoise
-          speed,          // [8] speed
-          durationArg,    // [9] duration
-          preprocess,     // [10] preprocess_prompt
-          postprocess,    // [11] postprocess_output
-        ],
-      }
-    : {
-        data: [
-          cleanText,                                  // [0] text
-          language,                                   // [1] language
-          numStep,                                    // [2] steps
-          guidanceScale,                              // [3] cfg
-          denoise,                                    // [4] denoise
-          speed,                                      // [5] speed
-          durationArg,                                // [6] duration
-          preprocess,                                 // [7] preprocess
-          postprocess,                                // [8] postprocess
-          (body.gender as string) || "Auto",          // [9] gender
-          (body.age as string) || "Auto",             // [10] age
-          (body.pitch as string) || "Auto",           // [11] pitch
-          (body.style as string) || "Auto",           // [12] style
-          (body.accent as string) || "Auto",          // [13] English accent
-          (body.dialect as string) || "Auto",         // [14] Chinese dialect
-        ],
-      };
+  const data: unknown[] = useClone
+    ? [
+        cleanText,      // [0] text
+        language,       // [1] language
+        refAudioArg,    // [2] ref_audio (FileData | null)
+        refText,        // [3] ref_text
+        instructFinal,  // [4] instruct
+        numStep,        // [5] inference steps
+        guidanceScale,  // [6] guidance scale
+        denoise,        // [7] denoise
+        speed,          // [8] speed
+        durationArg,    // [9] duration
+        preprocess,     // [10] preprocess_prompt
+        postprocess,    // [11] postprocess_output
+      ]
+    : [
+        cleanText,                                  // [0] text
+        language,                                   // [1] language
+        numStep,                                    // [2] steps
+        guidanceScale,                              // [3] cfg
+        denoise,                                    // [4] denoise
+        speed,                                      // [5] speed
+        durationArg,                                // [6] duration
+        preprocess,                                 // [7] preprocess
+        postprocess,                                // [8] postprocess
+        (body.gender as string) || "Auto",          // [9] gender
+        (body.age as string) || "Auto",             // [10] age
+        (body.pitch as string) || "Auto",           // [11] pitch
+        (body.style as string) || "Auto",           // [12] style
+        (body.accent as string) || "Auto",          // [13] English accent
+        (body.dialect as string) || "Auto",         // [14] Chinese dialect
+      ];
 
   // Try up to 2 attempts: the Zero-GPU public Space often fails the first call
   // after a cold boot and succeeds on retry. For paid Spaces the retry is
@@ -180,8 +176,8 @@ export async function POST(request: NextRequest) {
     const result = await callSpaceOnce({
       spaceUrl: SPACE_URL,
       token: HF_TOKEN,
-      endpoint,
-      payload,
+      fnIndex,
+      data,
     });
     if (result.audio) {
       return new Response(result.audio, {
@@ -218,59 +214,77 @@ export async function POST(request: NextRequest) {
 }
 
 // ---------------------------------------------------------------------------
-// One-shot Gradio call: POST → event_id, GET SSE → { url | path } → fetch audio
+// Queue-based Gradio call.
+//
+// The older `/gradio_api/call/<endpoint>` API returns `event: error / data: null`
+// intermittently against the k2-fsa/OmniVoice Space — every test against it
+// failed even when the Space was healthy. The newer `/gradio_api/queue/join`
+// + `/gradio_api/queue/data` pipeline is what the Gradio JS client itself
+// uses; it streams structured queue messages (estimation → process_starts →
+// process_completed) and is reliable.
 // ---------------------------------------------------------------------------
 async function callSpaceOnce(args: {
   spaceUrl: string;
   token: string;
-  endpoint: string;
-  payload: { data: unknown[] };
+  fnIndex: 0 | 1; // 0 = _clone_fn, 1 = _design_fn
+  data: unknown[];
 }): Promise<
   | { audio: ArrayBuffer; contentType: string; status: 200; error?: never }
   | { audio: null; contentType?: never; status: number; error: string }
 > {
-  const { spaceUrl, token, endpoint, payload } = args;
+  const { spaceUrl, token, fnIndex, data } = args;
+
+  const sessionHash = randomSessionHash();
 
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    "Content-Type": "application/json; charset=utf-8",
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const callUrl = `${spaceUrl}/gradio_api/call/${endpoint}`;
-
-  // Step 1: POST to start
+  // Step 1: POST to /gradio_api/queue/join — schedules the work and returns
+  // an event_id. We include fn_index (the position of the endpoint in
+  // Gradio's dependency list) and a unique session_hash so we can later
+  // subscribe to exactly our job's updates.
   let eventId: string;
   try {
-    const startResp = await fetch(callUrl, {
+    const joinResp = await fetch(`${spaceUrl}/gradio_api/queue/join`, {
       method: "POST",
       headers,
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        data,
+        fn_index: fnIndex,
+        session_hash: sessionHash,
+        trigger_id: 0,
+      }),
     });
-    if (!startResp.ok) {
-      const errText = await startResp.text().catch(() => "");
+    if (!joinResp.ok) {
+      const errText = await joinResp.text().catch(() => "");
       return {
         audio: null,
-        status: startResp.status,
-        error: `Gradio start failed (${startResp.status}): ${errText || startResp.statusText}`,
+        status: joinResp.status,
+        error: `Gradio queue join failed (${joinResp.status}): ${errText || joinResp.statusText}`,
       };
     }
-    const started = (await startResp.json()) as { event_id?: string };
-    if (!started.event_id) {
+    const joined = (await joinResp.json()) as { event_id?: string };
+    if (!joined.event_id) {
       return { audio: null, status: 502, error: "Gradio did not return an event_id" };
     }
-    eventId = started.event_id;
+    eventId = joined.event_id;
   } catch (err) {
     return { audio: null, status: 502, error: `Gradio unreachable: ${String(err)}` };
   }
 
-  // Step 2: GET SSE stream
-  const resultUrl = `${spaceUrl}/gradio_api/call/${endpoint}/${eventId}`;
+  // Step 2: subscribe to the SSE stream. Events we care about:
+  //   {msg: "estimation"}       — queued, optional rank_eta
+  //   {msg: "process_starts"}   — model is actually running
+  //   {msg: "process_completed", success, output: {...|error}}
+  //   {msg: "close_stream"}
+  const streamUrl = `${spaceUrl}/gradio_api/queue/data?session_hash=${encodeURIComponent(sessionHash)}`;
   let audioUrl: string | null = null;
   let completionInfo = "";
-  let sawError = false;
 
   try {
-    const streamResp = await fetch(resultUrl, {
+    const streamResp = await fetch(streamUrl, {
       method: "GET",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
@@ -278,58 +292,51 @@ async function callSpaceOnce(args: {
       return {
         audio: null,
         status: streamResp.status,
-        error: `Gradio poll failed: ${streamResp.status}`,
+        error: `Gradio queue stream failed: ${streamResp.status}`,
       };
     }
 
     const reader = streamResp.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
-    let currentEvent = "";
     outer: while (true) {
       const { value, done } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
       let lineEnd;
       while ((lineEnd = buf.indexOf("\n")) !== -1) {
-        const line = buf.slice(0, lineEnd).trim();
+        const rawLine = buf.slice(0, lineEnd);
         buf = buf.slice(lineEnd + 1);
-        if (line.startsWith("event:")) {
-          currentEvent = line.slice(6).trim();
-        } else if (line.startsWith("data:")) {
-          const dataStr = line.slice(5).trim();
-          if (currentEvent === "complete" || currentEvent === "generating") {
-            try {
-              const data = JSON.parse(dataStr);
-              const first = Array.isArray(data) ? data[0] : null;
-              const info = Array.isArray(data) && data.length > 1 ? data[1] : null;
-              if (first && typeof first === "object") {
-                if (first.url) audioUrl = first.url;
-                else if (first.path) audioUrl = `${spaceUrl}/gradio_api/file=${first.path}`;
-              }
-              if (typeof info === "string") completionInfo = info;
-            } catch {
-              /* non-JSON status frame, skip */
-            }
-          }
-          if (currentEvent === "complete") break outer;
-          if (currentEvent === "error") {
-            sawError = true;
-            // Attempt to extract the human-readable message
-            try {
-              const errData = JSON.parse(dataStr);
-              if (typeof errData === "string") completionInfo = errData;
-              else if (errData && typeof errData === "object") {
-                completionInfo =
-                  (errData as { message?: string }).message ||
-                  JSON.stringify(errData);
-              }
-            } catch {
-              completionInfo = dataStr || completionInfo;
-            }
-            break outer;
-          }
+        const line = rawLine.trim();
+        if (!line.startsWith("data:")) continue;
+        const jsonStr = line.slice(5).trim();
+        if (!jsonStr) continue;
+        let msg: QueueMessage;
+        try {
+          msg = JSON.parse(jsonStr) as QueueMessage;
+        } catch {
+          continue;
         }
+        // Only react to our own event_id (the stream can carry other users' events)
+        if (msg.event_id && msg.event_id !== eventId) continue;
+
+        if (msg.msg === "process_completed") {
+          if (msg.success && msg.output && Array.isArray(msg.output.data)) {
+            const first = msg.output.data[0] as
+              | { url?: string; path?: string }
+              | null;
+            if (first && typeof first === "object") {
+              if (first.url) audioUrl = first.url;
+              else if (first.path) audioUrl = `${spaceUrl}/gradio_api/file=${first.path}`;
+            }
+            const second = msg.output.data[1];
+            if (typeof second === "string") completionInfo = second;
+          } else if (msg.output && typeof msg.output === "object" && "error" in msg.output) {
+            completionInfo = String(msg.output.error);
+          }
+          break outer;
+        }
+        if (msg.msg === "close_stream") break outer;
       }
     }
   } catch (err) {
@@ -337,11 +344,11 @@ async function callSpaceOnce(args: {
   }
 
   if (!audioUrl) {
-    const msg = completionInfo || (sawError ? "Gradio returned an error event" : "empty result");
+    const msg = completionInfo || "empty result";
     return { audio: null, status: 502, error: `OmniVoice: ${msg}` };
   }
 
-  // Step 3: fetch the generated audio
+  // Step 3: fetch the generated audio bytes and return them to the caller
   try {
     const audioResp = await fetch(audioUrl, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -362,6 +369,23 @@ async function callSpaceOnce(args: {
   } catch (err) {
     return { audio: null, status: 502, error: `Audio fetch failed: ${String(err)}` };
   }
+}
+
+interface QueueMessage {
+  msg: string;
+  event_id?: string;
+  success?: boolean;
+  output?: {
+    data?: unknown[];
+    error?: unknown;
+  };
+}
+
+function randomSessionHash(): string {
+  // 12 random hex chars — enough entropy for per-request uniqueness.
+  return Array.from({ length: 12 }, () =>
+    Math.floor(Math.random() * 16).toString(16)
+  ).join("");
 }
 
 // ---------------------------------------------------------------------------
