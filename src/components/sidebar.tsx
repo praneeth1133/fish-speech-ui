@@ -15,6 +15,7 @@ import {
   Moon,
   Menu,
   X,
+  Globe2,
 } from "lucide-react";
 import { useQueueStore } from "@/lib/queue-store";
 import { useBackendStatus } from "@/lib/use-backend-status";
@@ -23,6 +24,7 @@ import { useEffect, useState } from "react";
 
 const navItems = [
   { href: "/", label: "Text to Speech", icon: Mic },
+  { href: "/omnivoice", label: "OmniVoice (600+)", icon: Globe2 },
   { href: "/voices", label: "Voice Library", icon: Library },
   { href: "/history", label: "History", icon: Clock },
   { href: "/api-keys", label: "API Keys", icon: Key },
